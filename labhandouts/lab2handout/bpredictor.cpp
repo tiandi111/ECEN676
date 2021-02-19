@@ -12,6 +12,8 @@ static UINT64 takenIncorrect = 0;
 static UINT64 notTakenCorrect = 0;
 static UINT64 notTakenIncorrect = 0;
 
+PIN_LOCK lock;
+
 class BranchPredictor {
 
   public:
@@ -51,7 +53,7 @@ class myBranchPredictor: public BranchPredictor {
     } else {
       pht.at(idx).at(ptn).dec();
     }
-    bht.at(idx) = bht.at(idx) << 1 & takenActually;
+    bht.at(idx) = bht.at(idx) << 1 | takenActually;
   }
 
   UINT32 index(ADDRINT address) {
@@ -59,7 +61,7 @@ class myBranchPredictor: public BranchPredictor {
   }
 
   UINT32 pattern(UINT32 index) {
-    return bht.at(index) & patternBitMask;;
+    return bht.at(index) & patternBitMask;
   }
 
   UINT32 bits() {
@@ -103,6 +105,7 @@ void handleBranch(ADDRINT ip, BOOL direction)
 {
   BOOL prediction = BP->makePrediction(ip);
   BP->makeUpdate(direction, prediction, ip);
+  PIN_GetLock(&lock, 0);
   if(prediction) {
     if(direction) {
       takenCorrect++;
@@ -118,6 +121,7 @@ void handleBranch(ADDRINT ip, BOOL direction)
       notTakenCorrect++;
     }
   }
+  PIN_ReleaseLock(&lock);
 }
 
 
@@ -160,6 +164,8 @@ int main(int argc, char * argv[])
 
     // Initialize pin
     PIN_Init(argc, argv);
+
+    PIN_InitLock(&lock);
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(instrumentBranch, 0);
