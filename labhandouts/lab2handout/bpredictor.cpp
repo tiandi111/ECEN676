@@ -25,12 +25,12 @@ class BranchPredictor {
 
 };
 
-// myBranchPredictor implements a configurable 2-level PAp branch predictor.
+// PApBranchPredictor implements a configurable 2-level PAp branch predictor.
 // That is, a 2-level adaptive branch predictor with per-address branch history
 // table and per-address pattern history table.
-class myBranchPredictor: public BranchPredictor {
+class PApBranchPredictor: public BranchPredictor {
   public:
-  myBranchPredictor(UINT32 _patternBits, UINT32 _bhtSize) : patternBits(_patternBits), bhtSize(_bhtSize) {
+    PApBranchPredictor(UINT32 _patternBits, UINT32 _bhtSize) : patternBits(_patternBits), bhtSize(_bhtSize) {
     UINT32 bitsUsed = bits();
     assert(bitsUsed <= 33000);
     printf("Total bits used: %d", bitsUsed);
@@ -56,19 +56,25 @@ class myBranchPredictor: public BranchPredictor {
     bht.at(idx) = bht.at(idx) << 1 | takenActually;
   }
 
+  // index returns the entry to branch history table and branch pattern table
+  // given the instruction address
   UINT32 index(ADDRINT address) {
     return address % bht.size();
   }
 
+  // pattern returns the history pattern given the index
+  // note that the index must be computed by the index function
   UINT32 pattern(UINT32 index) {
     return bht.at(index) & patternBitMask;
   }
 
+  // bits calculates total bits used
   UINT32 bits() {
     return patternBits * bhtSize + bhtSize * 2 * (1 << patternBits);
   }
 
   private:
+  // cnt2bit implements a 2-bit saturating counter
   struct cnt2bit {
     char cnt;
     cnt2bit() : cnt(0) {}
@@ -89,8 +95,8 @@ class myBranchPredictor: public BranchPredictor {
   UINT32 patternBits;
   UINT32 bhtSize;
   UINT32 patternBitMask;
-  std::vector<std::vector<cnt2bit> > pht;
-  std::vector<UINT64> bht;
+  std::vector<std::vector<cnt2bit> > pht; // pattern history table
+  std::vector<UINT64> bht;                // branch history table
 };
 
 BranchPredictor* BP;
@@ -160,11 +166,12 @@ VOID Fini(int, VOID * v)
 int main(int argc, char * argv[])
 {
     // Make a new branch predictor
-    BP = new myBranchPredictor(10, 16);
+    BP = new PApBranchPredictor(10, 16);
 
     // Initialize pin
     PIN_Init(argc, argv);
 
+    // Initialize lock
     PIN_InitLock(&lock);
 
     // Register Instruction to be called to instrument instructions
