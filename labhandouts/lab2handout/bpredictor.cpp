@@ -32,26 +32,26 @@ class myBranchPredictor: public BranchPredictor {
     UINT32 bitsUsed = bits();
     assert(bitsUsed <= 33000);
     printf("Total bits used: %d", bitsUsed);
-    pht = std::vector<std::vector<cnt2bit>>(bhtSize, std::vector<cnt2bit>(1 << patternBits, cnt2bit()));
+    pht = std::vector<std::vector<cnt2bit> >(bhtSize, std::vector<cnt2bit>(1 << patternBits, cnt2bit()));
     bht = std::vector<UINT64>(bhtSize, 0);
-    patternBitMask = 1 << patternBits - 1;
+    patternBitMask = (1 << patternBits) - 1;
   }
 
   BOOL makePrediction(ADDRINT address) {
-    UINT32 index = index(address);
-    UINT32 pattern = pattern(index);
-    return pht.at(index).at(pattern).pred();
+    UINT32 idx = index(address);
+    UINT32 ptn = pattern(idx);
+    return pht.at(idx).at(ptn).pred();
   }
 
   void makeUpdate(BOOL takenActually, BOOL takenPredicted, ADDRINT address) {
-    UINT32 index = index(address);
-    UINT32 pattern = pattern(index);
+    UINT32 idx = index(address);
+    UINT32 ptn = pattern(idx);
     if (takenActually) {
-      pht.at(index).at(pattern).inc();
+      pht.at(idx).at(ptn).inc();
     } else {
-      pht.at(index).at(pattern).dec();
+      pht.at(idx).at(ptn).dec();
     }
-    bht.at(index) = bht.at(index) << 1 & takenActually;
+    bht.at(idx) = bht.at(idx) << 1 & takenActually;
   }
 
   UINT32 index(ADDRINT address) {
@@ -87,7 +87,7 @@ class myBranchPredictor: public BranchPredictor {
   UINT32 patternBits;
   UINT32 bhtSize;
   UINT32 patternBitMask;
-  std::vector<std::vector<cnt2bit>> pht;
+  std::vector<std::vector<cnt2bit> > pht;
   std::vector<UINT64> bht;
 };
 
