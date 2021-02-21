@@ -25,6 +25,8 @@ class BranchPredictor {
 
   virtual UINT32 bits() { return 0; };
 
+  virtual VOID printStat() {};
+
 };
 
 // satCounter implements configurable saturating counter
@@ -54,7 +56,7 @@ class GlobalBranchPredictor : public BranchPredictor {
     : patternBits(_patternBits), counterBits(_counterBits) {
       UINT32 bitsUsed = bits();
       assert(bitsUsed <= 33000);
-      printf("GlobalBranchPredictor total bits used: %d", bitsUsed);
+      printf("GlobalBranchPredictor total bits used: %d\n", bitsUsed);
       pht = std::vector<satCounter>(1 << patternBits, satCounter(counterBits));
       patternBitMask = (1 << patternBits) - 1;
     }
@@ -96,8 +98,8 @@ class PApBranchPredictor : public BranchPredictor {
     : patternBits(_patternBits), bhtSize(_bhtSize), counterBits(_counterBits) {
       UINT32 bitsUsed = bits();
       assert(bitsUsed <= 33000);
-      printf("PApBranchPredictor total bits used: %d", bitsUsed);
-      pht = std::vector<std::vector<cnt2bit> >(bhtSize, std::vector<cnt2bit>(1 << patternBits, satCounter(counterBits)));
+      printf("PApBranchPredictor total bits used: %d\n", bitsUsed);
+      pht = std::vector<std::vector<satCounter> >(bhtSize, std::vector<satCounter>(1 << patternBits, satCounter(counterBits)));
       bht = std::vector<UINT64>(bhtSize, 0);
       patternBitMask = (1 << patternBits) - 1;
     }
@@ -150,17 +152,24 @@ class PApBranchPredictor : public BranchPredictor {
 class TournamentBranchPredictor : public BranchPredictor {
   public:
     TournamentBranchPredictor(BranchPredictor* _bp1, BranchPredictor* _bp2, UINT32 _selectorSize, UINT32 _counterBits)
-     : bp1(_bp1), bp2(_bp2), selectorSize(_selectorSize), counterBits(_counterBits)
+     : bp1(_bp1), bp2(_bp2), counterBits(_counterBits), selectorSize(_selectorSize)
     {
       UINT32 bitsUsed = bits();
       assert(bitsUsed <= 33000);
-      printf("TournamentBranchPredictor total bits used: %d", bitsUsed);
+      printf("TournamentBranchPredictor total bits used: %d\n", bitsUsed);
       selector = std::vector<satCounter>(selectorSize, satCounter(counterBits));
     }
 
     BOOL makePrediction(ADDRINT address) {
-      return selector.at(address % selector.size()).pred() ?
-              bp1->makePrediction(address) : bp2->makePrediction(address);
+      if (selector.at(address % selector.size()).pred()) {
+        use1++;
+        return bp1->makePrediction(address);
+      } else {
+        use2++;
+        return bp2->makePrediction(address);
+      }
+      //return selector.at(address % selector.size()).pred() ?
+      //        bp1->makePrediction(address) : bp2->makePrediction(address);
     }
 
     void makeUpdate(BOOL takenActually, BOOL takenPredicted, ADDRINT address) {
@@ -177,12 +186,19 @@ class TournamentBranchPredictor : public BranchPredictor {
     }
 
     UINT32 bits() {
-      return bp1.bits() + bp2.bits() + selectorSize * counterBits;
+      return bp1->bits() + bp2->bits() + selectorSize * counterBits;
+    }
+
+    VOID printStat() {
+      float total = use1 + use2;
+      printf("Use1: %f(%f)\nUse2: %f(%f)\nTotal: %f\n", use1, use1/total, use2, use2/total, total);
     }
 
   private:
     BranchPredictor* bp1;
     BranchPredictor* bp2;
+    float use1;
+    float use2;
     UINT32 counterBits;
     UINT32 selectorSize;
     std::vector<satCounter> selector;
@@ -248,6 +264,7 @@ VOID Fini(int, VOID * v)
   outfile.setf(ios::showbase);
   outfile << "takenCorrect: "<< takenCorrect <<"  takenIncorrect: "<< takenIncorrect <<" notTakenCorrect: "<< notTakenCorrect <<" notTakenIncorrect: "<< notTakenIncorrect <<"\n";
   outfile.close();
+  BP->printStat();
 }
 
 
@@ -255,9 +272,11 @@ VOID Fini(int, VOID * v)
 int main(int argc, char * argv[])
 {
     // Make a new branch predictor
-    GlobalBranchPredictor gbp = new GlobalBranchPredictor(10, 2);
-    PApBranchPredictor papbp = new PApBranchPredictor(2, 4, 802);
-    BP = new TournamentBranchPredictor(gbp, papbp, 2, 1024);
+    BranchPredictor* gbp = new GlobalBranchPredictor(10, 2);
+    BranchPredictor* papbp = new PApBranchPredictor(2, 1990, 3);
+//    BP = gbp;
+//    BP = papbp;
+    BP = new TournamentBranchPredictor(papbp, gbp, 1024, 3);
 
     // Initialize pin
     PIN_Init(argc, argv);
