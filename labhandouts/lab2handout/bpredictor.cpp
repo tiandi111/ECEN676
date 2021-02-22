@@ -1,6 +1,7 @@
 #include <iostream>
 #include <stdio.h>
 #include <assert.h>
+#include <stdlib.h>
 #include <fstream>
 #include <vector>
 #include "pin.H"
@@ -42,6 +43,12 @@ struct satCounter {
     }
     inline void clear() {
       cnt = 0;
+    }
+    inline void reset(char _cnt) {
+      cnt = _cnt;
+    }
+    inline char mid() {
+      return 1 << (bits - 1);
     }
     BOOL pred() {
       return cnt >= (1 << (bits - 1));
@@ -204,6 +211,286 @@ class TournamentBranchPredictor : public BranchPredictor {
     std::vector<satCounter> selector;
 };
 
+// TAGEBranchPredictor implements a configurable TAgged GEometric history length predictor.
+// More details see paper: https://www.jilp.org/vol8/v8paper1.pdf by Andre Seznec, Pierre Michaud
+class TAGEBranchPredictor : public BranchPredictor {
+  public:
+    // hashFunc hash the branch address, branch history with a given history length
+    // this function is used to index tagged branch prediction table
+    typedef UINT32 (*hashFunc)(ADDRINT address, std::vector<UINT64>& hist, std::vector<UINT64>& histMask, UINT32 indexBits);
+
+    static UINT32 defaultHash(ADDRINT address, std::vector<UINT64>& hist, std::vector<UINT64>& histMask, UINT32 indexBits) {
+      for (int i = 0; i < hist.size(); ++i) {
+        address ^= hist.at(i) & histMask.at(i);
+      }
+      UINT64 indexBitMask = (1 << indexBits) - 1;
+      UINT32 index = 0;
+      for (int i = 0; i < 64; i += indexBits) {
+        index ^= address & indexBitMask;
+        indexBitMask << indexBits;
+      }
+      return index;
+    }
+
+    // TAGEBranchPredictor constructor
+    TAGEBranchPredictor(
+            UINT32 _alpha,
+            UINT32 _T,
+            UINT32 _totalHistLen,
+            UINT32 _cntBits,
+            UINT32 _tagBits,
+            UINT32 _numComp,
+            std::vector<UINT32> compIndexBits,
+            GlobalBranchPredictor* _gbp,
+            hashFunc* _h)
+
+    : alpha(_alpha), totalHistLen(_totalHistLen), gbp(_gbp) {
+      if (!_h) _h = defaultHash;
+      h = _h;
+
+      UINT32 histArrLen = _totalHistLen/64 + (_totalHistLen % 64 == 0 ? 0 : 1);
+      hist = std::vector<UINT64>(histArrLen, 0);
+      for (int i = 0; i < _numComp; ++i, _T *= alpha) {
+        // the used history length(the first argument below) is calculated by:
+        // used history length = alpha^(i-1) * _T
+        comps.push_back(taggedBranchPredictor(compIndexBits.at(i), _cntBits, _tagBits));
+        // initialize history mask
+        histMask = std::vector<UINT64>(histArrLen, 0);
+        for (int j = 0, UINT64 setMask = 1; j < _T; ++j) {
+          histMask.at(j / 64) &= setMask;
+          setMask = j % 64 == 0 ? 1 : setMask << 1;
+        }
+        histMasks.push_back(histMask);
+      }
+      UINT32 bitsUsed = bits();
+      printf("TAGEBranchPredictor total bits used: %d\n", bitsUsed);
+      assert(bitsUsed <= 33000);
+
+    }
+
+    // makePrediction makes a prediction
+    // the prediction is choose as the component predictor with the longest history length
+    // whose tag matched with address, if no such predictor, the fallback predictor is used.
+    BOOL makePrediction(ADDRINT address) {
+      lastProvider = 0;
+      lastProviderIndex = 0;
+      lastAlter = 0;
+      lastAlterIndex = 0;
+
+      for (int i = comps.size(); i >= 0; --i) {
+
+        UINT32 index = (*h)(address, hist, histMasks.at(i), comps.at(i).indexBits());
+
+        if (comps.at(i).match(index, address)) {
+
+          if (lastProvider == 0) {
+            lastProvider = i+1;
+            lastProviderIndex = index;
+          } else if (lastAlter == 0) {
+            lastAlter = i+1;
+            lastAlterIndex = index;
+            break;
+          }
+
+        }
+
+      }
+
+      if (lastProvider > 0) {
+        return comps.at(lastProvider-1).makePrediction(lastProviderIndex);
+      }
+      return lastAlter > 0 ? comps.at(lastAlter-1).makePrediction(lastAlterIndex) : gdb->makePrediction(address);
+    }
+
+    // makeUpdate makes an update to the predictor
+    // this function must be preceded with a call to makePrediction since it relies
+    // on some internal states
+    void makeUpdate(BOOL takenActually, BOOL takenPredicted, ADDRINT address) {
+      if (lastProvider > 0) { // provider is tagged component
+
+        BOOL altPred = lastAlter > 0 ? comps.at(lastAlter-1).makePrediction(lastAlterIndex) : gdb->makePrediction(address);
+
+        if (takenPredicted != altPred) {
+          comps.at(lastProvider - 1).updateUse(lastProviderIndex, takenActually == takenPredicted);
+        }
+
+        comps.at(lastProvider - 1).updatePred(lastProviderIndex, takenActually);
+
+      } else { // provider is global branch predictor
+        gbp->makeUpdate(address);
+      }
+
+      // allocate an entry from a predictor with longer history length
+      if (takenActually != takenPredicted && lastProvider != comps.size()) {
+
+        // find two candidates
+        UINT32 cand1 = 0;
+        UINT32 cand2 = 0;
+        UINT32 minProviderCand = lastProvider == 0 ? 0 : lastProvider-1;
+        for (int i = comps.size()-1; i > minProviderCand; --i) {
+          UINT32 index = (*h)(address, hist, histMasks.at(i), comps.at(i).indexBits());
+
+          if (comps.at(i).useValue(index) != 0) continue;
+
+          if (cand1 == 0) {
+            cand1 = i;
+          } else if (cand2 == 0) {
+            cand2 = i;
+            break;
+          }
+
+        }
+
+        if (cand1 == 0 && cand2 == 0) { // no candidates, decrement all use counters
+
+          for (int i = 0; i < comps.size(); ++i) {
+            comps.at(i).updateUse(false);
+          }
+
+        } else { // at least one candidates
+
+          if (cand1 > 0 && cand2 > 0) { // if two candidates, choose cand1 with probability of 33.3%
+            cand1 = rand() % 3 == 0 ? cand1 : cand2;
+          }
+
+          UINT32 index = (*h)(address, hist, comps.at(cand1).histLen());
+          comps.at(cand1).allocate(index);
+
+        }
+
+      }
+
+      updateHist(takenActually);
+    }
+
+    // updateHist updates the branch history
+    VOID updateHist(BOOL taken) {
+      UINT64 lsb = taken ? 1 : 0;
+      for (int i = 0; i < hist.size(); ++i) {
+        UINT64 msb = (hist.at(i) & 0x8000000000000000) == 0 ? 0 : 1;
+        hist.at(i) = hist.at(i) << 1;
+        hist.at(i) |= lsb;
+        lsb = msb;
+      }
+    }
+
+    // bits returns total bits used
+    UINT32 bits() {
+      UINT32 total = gbp->bits();
+      for (int i = 0; i < comps.size(); ++i) {
+        total += comps.at(i).bits();
+      }
+      return total;
+    }
+
+    VOID printStat() {}
+
+  private:
+    // taggedBranchPredictor is an internal class that implements a tagged branch predictor
+    class taggedBranchPredictor {
+      public:
+        taggedBranchPredictor(UINT32 _indexBits, UINT32 _cntBits, UINT32 _tagBits)
+        : indexBits(_indexBits),
+        indexBitMask((1 << indexBits) -1),
+        cntBits(_cntBits),
+        tagBits(_tagBits),
+        useBits(2),
+        entries(1 << indexBits, entry(cntBits, tagBits, useBits)) {}
+
+        // match does a tag match
+        BOOL match(UINT64 index, UINT64 target) {
+          return entries.at(index).match(target);
+        }
+
+        BOOL makePrediction(UINT64 index) {
+          return entries.at(index).pred();
+        }
+
+        // allocate allocates an entry for the given target
+        VOID allocate(UINT64 index, UINT64 target) {
+          entries.at(index).alloc(target);
+        }
+
+        // update use counter from the last used entry, muse be preceded with a call
+        // to makePrediction since it relies on lastUsedEntry
+        VOID updateUse(UINT64 index, BOOL inc) {
+          if (inc) {
+            entries.at(index).use.inc();
+          } else {
+            entries.at(index).use.dec();
+          }
+        }
+
+        // update prediction counter from the last used entry, muse be preceded with a call
+        // to makePrediction since it relies on lastUsedEntry
+        VOID updatePred(UINT64 index, BOOL takenActually) {
+          if (takenActually) {
+            entries.at(index).cnt.inc();
+          } else {
+            entries.at(index).cnt.dec();
+          }
+        }
+
+        inline char useValue(UINT64 index) {
+          return entries.at(index).use.cnt;
+        }
+
+        inline UINT32 bits() {
+          return entries.size() * (tagBits + cntBits + useBits);
+        }
+
+        inline UINT32 histLen() { return histLen; }
+        inline UINT32 indexBits() { return indexBits; }
+
+      private:
+        // entry is the tagged prediction table entry
+        struct entry {
+            UINT64 tag;
+            UINT64 tagMask;
+            satCounter cnt;
+            satCounter use;
+
+            entry(UINT32 _cntBits, UINT32 _tagBits, UINT32 _useBits)
+            : cnt(_cntBits),
+            tagMask((1 << _tagBits) - 1),
+            use(_useBits) {}
+
+            inline BOOL match(UINT64 target) { return (target & tagMask) == (tag & tagMask); }
+
+            inline BOOL pred() { return cnt.pred(); }
+
+            inline VOID alloc(UINT64 _tag) {
+              tag = _tag;
+              cnt.reset(cnt.mid());
+              use.clear();
+            }
+        };
+
+        UINT32 indexBits;
+        UINT32 cntBits;
+        UINT32 tagBits;
+        UINT32 useBits;
+        UINT32 indexBitMask;
+        std::vector<entry> entries;
+    }
+
+    UINT32 alpha;                               // alpha factor used to calculate component history length
+    UINT32 numComp;                             // number of component branch predictors
+    UINT32 totalHistLen;                        // total number of branch history bits
+    std::vector<UINT64> hist;                   // branch history bits
+    std::vector<std::vector<UINT64> > histMasks; // branch history mask
+    GlobalBranchPredictor* gbp;                 // fallback predictor
+    std::vector<TaggedBranchPredictor> comps;   // component predictors
+    hashFunc* h;                                // the function used to index tagged predication table
+
+    // lastProvider and lastAlter are states from the last prediction(after calling makePrediction)
+    // if > 0, lastProvider-1 (or lastAlter-1) is the component index
+    UINT32 lastProvider;                      // the last predictor used
+    UINT32 lastProviderIndex;
+    UINT32 lastAlter;                         // the last alternate predictor
+    UINT32 lastAlterIndex;
+};
+
 BranchPredictor* BP;
 
 
@@ -214,9 +501,9 @@ KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "result.out", "
 // In examining handle branch, refer to quesiton 1 on the homework
 void handleBranch(ADDRINT ip, BOOL direction)
 {
+  PIN_GetLock(&lock, 0);
   BOOL prediction = BP->makePrediction(ip);
   BP->makeUpdate(direction, prediction, ip);
-  PIN_GetLock(&lock, 0);
   if(prediction) {
     if(direction) {
       takenCorrect++;
