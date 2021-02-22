@@ -62,8 +62,8 @@ class GlobalBranchPredictor : public BranchPredictor {
     GlobalBranchPredictor(UINT32 _patternBits, UINT32 _counterBits)
     : patternBits(_patternBits), counterBits(_counterBits) {
       UINT32 bitsUsed = bits();
-      assert(bitsUsed <= 33000);
       printf("GlobalBranchPredictor total bits used: %d\n", bitsUsed);
+      assert(bitsUsed <= 33000);
       pht = std::vector<satCounter>(1 << patternBits, satCounter(counterBits));
       patternBitMask = (1 << patternBits) - 1;
     }
@@ -253,6 +253,7 @@ class TAGEBranchPredictor : public BranchPredictor {
       for (int i = 0; i < _numComp; ++i, _T *= alpha) {
         // the used history length(the first argument below) is calculated by:
         // used history length = alpha^(i-1) * _T
+        assert(_T <= _totalHistLen);
         comps.push_back(taggedBranchPredictor(compIndexBits.at(i), _cntBits, _tagBits));
         // initialize history mask
         histMask = std::vector<UINT64>(histArrLen, 0);
@@ -561,9 +562,17 @@ int main(int argc, char * argv[])
     // Make a new branch predictor
     BranchPredictor* gbp = new GlobalBranchPredictor(10, 2);
     BranchPredictor* papbp = new PApBranchPredictor(2, 1990, 3);
+    UINT32 compIndexBitsArr[] = {512, 512, 512, 512, 512, 512, 512};
+    BranchPredictor* tage = new TAGEBranchPredictor(
+            2, 1,                     // alpha, T
+            192, 3, 4,                // totalHistLen, cntBits, tagBits
+            7,std::vector<UINT32>(compIndexBitsArr,
+                    compIndexBitsArr + sizeof(compIndexBitsArr) / sizeof(UINT32)), // numComp, compIndexBits
+            gbp, NULL);               // gbp, hashFunc
 //    BP = gbp;
 //    BP = papbp;
-    BP = new TournamentBranchPredictor(papbp, gbp, 1024, 3);
+    BP = tage;
+//    BP = new TournamentBranchPredictor(papbp, gbp, 1024, 3);
 
     // Initialize pin
     PIN_Init(argc, argv);
