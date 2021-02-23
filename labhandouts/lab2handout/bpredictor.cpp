@@ -50,7 +50,13 @@ struct satCounter {
     inline char mid() {
       return 1 << (bits - 1);
     }
-    BOOL pred() {
+    inline BOOL weak() {
+      return (cnt == mid()) || (cnt == mid()-1);
+    }
+    inline char val() {
+      return cnt;
+    }
+    inline BOOL pred() {
       return cnt >= (1 << (bits - 1));
     }
 };
@@ -217,18 +223,18 @@ class TAGEBranchPredictor : public BranchPredictor {
   public:
     // hashFunc hash the branch address, branch history with a given history length
     // this function is used to index tagged branch prediction table
-    typedef UINT32 (*hashFunc)(ADDRINT address, std::vector<UINT64>& hist, std::vector<UINT64>& histMask, UINT32 indexBits);
+    typedef UINT64 (*hashFunc)(UINT64 address, std::vector<UINT64>& hist, std::vector<UINT64>& histMask, UINT32 indexBits);
 
-    static UINT32 defaultHash(ADDRINT address, std::vector<UINT64>& hist, std::vector<UINT64>& histMask, UINT32 indexBits) {
+    static UINT64 defaultHash(UINT64 address, std::vector<UINT64>& hist, std::vector<UINT64>& histMask, UINT32 indexBits) { 
       for (int i = 0; UINT64(i) < hist.size(); ++i) {
         address ^= hist.at(i) & histMask.at(i);
       }
       UINT64 indexBitMask = (1 << indexBits) - 1;
-      UINT32 index = 0;
+      UINT64 index = 0;
       for (int i = 0; i < 64; i += indexBits) {
         index ^= address & indexBitMask;
-        indexBitMask <<= indexBits;
-      }
+        address >>= indexBits;
+      } 
       return index;
     }
 
@@ -239,22 +245,27 @@ class TAGEBranchPredictor : public BranchPredictor {
             UINT32 _totalHistLen,
             UINT32 _cntBits,
             UINT32 _tagBits,
-            UINT32 _numComp,
             std::vector<UINT32> compIndexBits,
-            GlobalBranchPredictor* _gbp,
+            BranchPredictor* _gbp,
             hashFunc _h)
 
     : alpha(_alpha), totalHistLen(_totalHistLen), gbp(_gbp) {
-      if (!_h) _h = &defaultHash;
+
+      if (!_h) _h = defaultHash; 
       h = _h;
 
       UINT32 histArrLen = _totalHistLen/64 + (_totalHistLen % 64 == 0 ? 0 : 1);
       hist = std::vector<UINT64>(histArrLen, 0);
-      for (int i = 0; UINT64(i) < _numComp; ++i, _T *= alpha) {
+
+      compStats = std::vector<stats>(compIndexBits.size()+1);
+
+      for (int i = 0; UINT64(i) < compIndexBits.size(); ++i, _T *= alpha) {
+
         // the used history length(the first argument below) is calculated by:
-        // used history length = alpha^(i-1) * _T
-        assert(_T <= _totalHistLen);
+        // used history length = alpha^(i-1) * _T 
+	assert(_T <= _totalHistLen);
         comps.push_back(taggedBranchPredictor(compIndexBits.at(i), _cntBits, _tagBits));
+
         // initialize history mask
         std::vector<UINT64> histMask(histArrLen, 0);
 	UINT64 setMask = 1;
@@ -264,8 +275,9 @@ class TAGEBranchPredictor : public BranchPredictor {
         }
         histMasks.push_back(histMask);
       }
-      UINT32 bitsUsed = bits();
-      printf("TAGEBranchPredictor total bits used: %d\n", bitsUsed);
+
+      UINT32 bitsUsed = bits(); 
+      std::cout<< "TAGEBranchPredictor total bits used: " << bitsUsed << std::endl;
       assert(bitsUsed <= 33000);
 
     }
@@ -279,12 +291,11 @@ class TAGEBranchPredictor : public BranchPredictor {
       lastAlter = 0;
       lastAlterIndex = 0;
 
-      for (int i = comps.size(); i >= 0; --i) {
-
-        UINT32 index = (*h)(address, hist, histMasks.at(i), comps.at(i).getIndexBits());
-
+      for (int i = comps.size()-1; i >= 0; --i) {
+ 
+        UINT64 index = h(address, hist, histMasks.at(i), comps.at(i).getIndexBits()); 
         if (comps.at(i).match(index, address)) {
-
+    
           if (lastProvider == 0) {
             lastProvider = i+1;
             lastProviderIndex = index;
@@ -296,10 +307,14 @@ class TAGEBranchPredictor : public BranchPredictor {
 
         }
 
-      }
+      } 
 
       if (lastProvider > 0) {
-        return comps.at(lastProvider-1).makePrediction(lastProviderIndex);
+        taggedBranchPredictor& comp = comps.at(lastProvider-1);
+        // use provider only when the entry is not newly allocated
+        if (!comp.isWeak(lastProviderIndex) || (comp.useValue(lastProviderIndex) != 0)) {
+          return comp.makePrediction(lastProviderIndex);
+        }
       }
       return lastAlter > 0 ? comps.at(lastAlter-1).makePrediction(lastAlterIndex) : gbp->makePrediction(address);
     }
@@ -316,27 +331,31 @@ class TAGEBranchPredictor : public BranchPredictor {
           comps.at(lastProvider - 1).updateUse(lastProviderIndex, takenActually == takenPredicted);
         }
 
-        comps.at(lastProvider - 1).updatePred(lastProviderIndex, takenActually);
+        comps.at(lastProvider - 1).updatePred(lastProviderIndex, takenActually); 
 
       } else { // provider is global branch predictor
         gbp->makeUpdate(takenActually, takenPredicted, address);
       }
 
+      // statistics
+      compStats.at(lastProvider).pred(takenActually == takenPredicted);
+      overall.pred(takenActually == takenPredicted);
+
       // allocate an entry from a predictor with longer history length
       if (takenActually != takenPredicted && lastProvider != comps.size()) {
 
         // find two candidates
-        UINT32 cand1 = 0;
-        UINT32 cand2 = 0;
-        UINT32 minProviderCand = lastProvider == 0 ? 0 : lastProvider-1;
+        UINT64 cand1 = 0;
+        UINT64 cand2 = 0;
+        UINT64 minProviderCand = lastProvider == 0 ? 0 : lastProvider;
 	
 	// compute indices for later use
-	std::vector<UINT32> indices;
+	std::vector<UINT64> indices;
 	for (int i = 0; UINT64(i) < comps.size(); ++i) {
 	  indices.push_back((*h)(address, hist, histMasks.at(i), comps.at(i).getIndexBits()));
 	}
 	
-        for (int i = comps.size()-1; UINT64(i) > minProviderCand; --i) { 
+        for (int i = minProviderCand; UINT64(i) < comps.size(); ++i) {  
 
           if (comps.at(i).useValue(indices.at(i)) != 0) continue;
 
@@ -358,7 +377,7 @@ class TAGEBranchPredictor : public BranchPredictor {
         } else { // at least one candidates
 
           if (cand1 > 0 && cand2 > 0) { // if two candidates, choose cand1 with probability of 33.3%
-            cand1 = rand() % 3 == 0 ? cand1 : cand2;
+            cand1 = rand() % 3 == 0 ? cand2 : cand1;
           }
 
           comps.at(cand1).allocate(indices.at(cand1), address);
@@ -383,14 +402,19 @@ class TAGEBranchPredictor : public BranchPredictor {
 
     // bits returns total bits used
     UINT32 bits() {
-      UINT32 total = gbp->bits();
+      UINT32 total = gbp->bits() + totalHistLen;
       for (int i = 0; UINT64(i) < comps.size(); ++i) {
         total += comps.at(i).bits();
       }
       return total;
     }
 
-    VOID printStat() {}
+    VOID printStat() {
+        for (int i = 0; UINT64(i) < compStats.size(); ++i) {
+          stats& st = compStats.at(i);
+          std::cout<< "Component " << i << ", total: " << st.total << "("<< 100*float(st.total)/float(overall.total)  << "%)" << ", correct: " << st.correct << "(" << 100*float(st.correct)/float(st.total)  << "%)" <<std::endl;
+        } 
+    }
 
   private:
     // taggedBranchPredictor is an internal class that implements a tagged branch predictor
@@ -411,6 +435,10 @@ class TAGEBranchPredictor : public BranchPredictor {
 
         BOOL makePrediction(UINT64 index) {
           return entries.at(index).pred();
+        }
+
+        BOOL isWeak(UINT64 index) {
+          return entries.at(index).cnt.weak(); 
         }
 
         // allocate allocates an entry for the given target
@@ -436,6 +464,10 @@ class TAGEBranchPredictor : public BranchPredictor {
           } else {
             entries.at(index).cnt.dec();
           }
+        }
+
+        inline UINT64 size() {
+          return entries.size();
         }
 
         inline char useValue(UINT64 index) {
@@ -485,16 +517,29 @@ class TAGEBranchPredictor : public BranchPredictor {
     UINT32 totalHistLen;                        // total number of branch history bits
     std::vector<UINT64> hist;                   // branch history bits
     std::vector<std::vector<UINT64> > histMasks; // branch history mask
-    GlobalBranchPredictor* gbp;                 // fallback predictor
+    BranchPredictor* gbp;                 // fallback predictor
     std::vector<taggedBranchPredictor> comps;   // component predictors
     hashFunc h;                                // the function used to index tagged predication table
 
     // lastProvider and lastAlter are states from the last prediction(after calling makePrediction)
     // if > 0, lastProvider-1 (or lastAlter-1) is the component index
-    UINT32 lastProvider;                      // the last predictor used
-    UINT32 lastProviderIndex;
-    UINT32 lastAlter;                         // the last alternate predictor
-    UINT32 lastAlterIndex;
+    UINT64 lastProvider;                      // the last predictor used
+    UINT64 lastProviderIndex;
+    UINT64 lastAlter;                         // the last alternate predictor
+    UINT64 lastAlterIndex;
+
+    // statistics
+    struct stats {
+      UINT64 total;
+      UINT64 correct;
+
+      VOID pred(BOOL res) {
+        total++;
+        correct += res ? 1 : 0;
+      }
+    };
+    std::vector<stats> compStats;
+    stats overall;
 };
 
 BranchPredictor* BP;
@@ -566,13 +611,12 @@ int main(int argc, char * argv[])
 {
     // Make a new branch predictor
     BranchPredictor* gbp = new GlobalBranchPredictor(10, 2);
-    BranchPredictor* papbp = new PApBranchPredictor(2, 1990, 3);
-    UINT32 compIndexBitsArr[] = {512, 512, 512, 512, 512, 512, 512};
+//    BranchPredictor* papbp = new PApBranchPredictor(2, 1990, 3);
+    UINT32 compIndexBitsArr[] = {9, 9, 9, 8, 8};
     BranchPredictor* tage = new TAGEBranchPredictor(
-            2, 1,                     // alpha, T
-            192, 3, 4,                // totalHistLen, cntBits, tagBits
-            7,std::vector<UINT32>(compIndexBitsArr,
-                    compIndexBitsArr + sizeof(compIndexBitsArr) / sizeof(UINT32)), // numComp, compIndexBits
+            2, 13,                     // alpha, T
+            210, 3, 10,                // totalHistLen, cntBits, tagBits
+            std::vector<UINT32>(compIndexBitsArr, compIndexBitsArr + sizeof(compIndexBitsArr) / sizeof(UINT32)), // numComp, compIndexBits
             gbp, NULL);               // gbp, hashFunc
 //    BP = gbp;
 //    BP = papbp;
