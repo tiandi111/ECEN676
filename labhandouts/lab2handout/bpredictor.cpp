@@ -401,7 +401,7 @@ class TAGEBranchPredictor : public BranchPredictor {
         cntBits(_cntBits),
         tagBits(_tagBits),
         useBits(2),
-	indexBitMask((1 << indexBits) -1),
+	      indexBitMask((1 << indexBits) -1),
         entries(1 << indexBits, entry(cntBits, tagBits, useBits)) {}
 
         // match does a tag match
@@ -571,7 +571,7 @@ int main(int argc, char * argv[])
     BranchPredictor* tage = new TAGEBranchPredictor(
             2, 1,                     // alpha, T
             192, 3, 4,                // totalHistLen, cntBits, tagBits
-            7,std::vector<UINT32>(compIndexBitsArr,
+            7, std::vector<UINT32>(compIndexBitsArr,
                     compIndexBitsArr + sizeof(compIndexBitsArr) / sizeof(UINT32)), // numComp, compIndexBits
             gbp, NULL);               // gbp, hashFunc
 //    BP = gbp;
