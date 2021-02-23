@@ -610,14 +610,14 @@ VOID Fini(int, VOID * v)
 int main(int argc, char * argv[])
 {
     // Make a new branch predictor
-    BranchPredictor* gbp = new GlobalBranchPredictor(10, 2);
-//    BranchPredictor* papbp = new PApBranchPredictor(2, 1990, 3);
+//    BranchPredictor* gbp = new GlobalBranchPredictor(10, 2);
+    BranchPredictor* papbp = new PApBranchPredictor(2, 140, 3);
     UINT32 compIndexBitsArr[] = {9, 9, 9, 8, 8};
     BranchPredictor* tage = new TAGEBranchPredictor(
             2, 13,                     // alpha, T
             210, 3, 10,                // totalHistLen, cntBits, tagBits
             std::vector<UINT32>(compIndexBitsArr, compIndexBitsArr + sizeof(compIndexBitsArr) / sizeof(UINT32)), // numComp, compIndexBits
-            gbp, NULL);               // gbp, hashFunc
+            papbp, NULL);               // gbp, hashFunc*/
 //    BP = gbp;
 //    BP = papbp;
     BP = tage;
