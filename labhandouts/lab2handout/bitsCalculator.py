@@ -9,5 +9,17 @@ def TAGE(histLen, cntBits, tagBits, useBits, compIndexBitsArr):
 def Global(patternBits, cntBits):
     return 2 ** patternBits * cntBits + patternBits
 
+
+def PAp(patternBits, bhtSize, counterBits):
+    return patternBits * bhtSize + bhtSize * counterBits * (1 << patternBits)
+
+
 if __name__ == '__main__':
-    print(Global(10, 2) + TAGE(256, 3, 10, 2, [9, 9, 9, 8, 8]))
+    TAGEBits = TAGE(310, 3, 8, 1, [9, 9, 9, 9, 9])
+    GlobalBits = Global(10, 2)
+    PApBits = PAp(2, 1990, 3)
+    print("Global: {}".format(GlobalBits))
+    print("PAp: {}".format(PApBits))
+    print("Global+TAGE: {}".format(GlobalBits + TAGEBits))
+    print("PAp+TAGE: {}".format(PApBits + TAGEBits))
+
