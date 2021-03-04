@@ -592,7 +592,7 @@ void instrumentBranch(INS ins, void * v)
       IARG_END);
   }
 }
- 
+
 
 /* ===================================================================== */
 VOID Fini(int, VOID * v)
