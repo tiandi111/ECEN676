@@ -82,53 +82,101 @@ CacheModel* cacheVV;
 
 class LruTable {
     public:
-        LruList(UINT32 rows, UINT32 associativity) {
-            assert(("LruTable rows must be > 0", rows > 0));
-            assert(("LruTable associativity must be > 0", associativity > 0));
+        LruTable(UINT32 rows, UINT32 associativity) {
+            assert( rows > 0 );
+            assert( associativity > 0 );
             for (INT64 i = 0; i < INT64(rows); ++i) {
-                table.emplace_back({});
+                table.push_back(std::list<UINT32> ());
                 for (INT64 j = 0; j < INT64(associativity); ++j) {
-                    table.at(i).emplace_back(j);
+                    table.at(i).push_back(j);
                 }
             }
-        }
-
-        ~LruList() = default ;
+        } 
 
         void touch(UINT32 row, UINT32 way) {
-            auto& entry = table.at(row);
-            for (auto it = entry.begin(); it != entry.end(); ++it) {
+            std::list<UINT32>& entry = table.at(row);
+            for (std::list<UINT32>::iterator it = entry.begin(); it != entry.end(); ++it) {
                 if (*it == way) {
                     entry.erase(it);
                     break;
                 }
             }
-            entry.emplace_front(way);
+            entry.push_front(way);
         }
 
         UINT32 front(UINT32 row) {
-            return table.at(row).front;
+            return table.at(row).front();
         }
 
     private:
-        std::vector<std::list<UINT32>> table;
+        std::vector<std::list<UINT32> > table;
+}; 
+
+class InvertedCache {
+    public:
+        InvertedCache(UINT32 logPhyMemSizeParam, UINT32 logBlockSizeParam)
+	: logPhyMemSize(logPhyMemSizeParam),
+          logBlockSize(logBlockSizeParam),
+          addrMask(~((1u << logBlockSize) - 1 )),
+	  phyBlkSize(1u << (logPhyMemSize - logBlockSize)),
+	  table(phyBlkSize, entry()) 
+        { 
+            for(UINT32 i = 0; i < phyBlkSize; i ++)
+	        table.at(i).valid = false; 
+        }
+
+	void set(UINT32 physicalAddr, UINT32 row, UINT32 way) {
+	    UINT32 idx = getRow(physicalAddr);
+            table.at(idx).row = row;
+            table.at(idx).way = way;
+	    table.at(idx).valid = true;
+        }
+
+        bool get(UINT32 physicalAddr, UINT32* row, UINT32* way) {
+            UINT32 idx = getRow(physicalAddr);
+            if (table.at(idx).valid) {
+                *row = table.at(idx).row;
+                *way = table.at(idx).way;
+            }
+	    return table.at(idx).valid;
+        }
+
+    private:
+        UINT32 getRow(UINT32 physicalAddr) {
+	    UINT32 idx = (physicalAddr & addrMask) >> logBlockSize; 
+            assert (idx < phyBlkSize);
+            return idx;
+        }
+
+	struct entry {
+            UINT32 row;
+	    UINT32 way;
+            BOOL   valid;
+        };
+
+	UINT32 logPhyMemSize;
+	UINT32 logBlockSize;
+        UINT32 addrMask;
+	UINT32 phyBlkSize;
+	std::vector<entry> table;
 };
 
-Uint32 getPageNum(UINT32 addr) {
+UINT32 getPageNum(UINT32 addr) {
     return addr >> logPageSize;
 }
 
 UINT32 getPhysicalAddr(UINT32 virtualAddr) {
     UINT32 offset = virtualAddr & pageOffsetMask;
-    return (getPhysicalPageNumber(getPageNum(virtualAddr)) << logPageSize) + offset;
+    return (offset + (getPhysicalPageNumber(getPageNum(virtualAddr)) << logPageSize) ) & ((1u << logPhysicalMemSize) - 1);
 }
 
 class LruAliasingFreeCacheModel : public CacheModel {
     public:
         LruAliasingFreeCacheModel(UINT32 logNumRowsParam, UINT32 logBlockSizeParam, UINT32 associativityParam)
-            : CacheModel(logNumRowsParam, logBlockSizeParam, associativityParam)
-        {
-            lruTable = LruTable(1u << logNumRows, associativity);
+            : CacheModel(logNumRowsParam, logBlockSizeParam, associativityParam),
+              lruTable(1u << logNumRows, associativity),
+              invrtCache(logPhysicalMemSize, logBlockSize)
+        { 
             tagMask = ~( (1u << (logNumRows + logBlockSize)) - 1);
         }
 
@@ -136,7 +184,7 @@ class LruAliasingFreeCacheModel : public CacheModel {
 
         virtual void writeReq(UINT32 virtualAddr) = 0;
 
-    private:
+    protected:
         UINT32 getRow(UINT32 addr) {
             return (addr >> logBlockSize) & ((1u << logNumRows) - 1);
         }
@@ -155,40 +203,45 @@ class LruAliasingFreeCacheModel : public CacheModel {
             writeHits += readReq ? 0 : 1;
         }
 
-        void evict(UINT32 row, UINR32 way, UINT32 addrTag) {
+        void evict(UINT32 row, UINT32 way, UINT32 addrTag, UINT32 physicalAddr) {
             validBit[row][way] = true;
             tag[row][way] = addrTag;
-            lruTable(row, way).touch();
+            lruTable.touch(row, way);
+            invrtCache.set(physicalAddr, row, way);
         }
 
-        void handleReq(BOOL readReq, BOOL disallowAliasing, UINT32 row, UINT32 addrTag)
+        void invalidateAliasing(UINT32 physicalAddr) {
+            UINT32 row = 0;
+            UINT32 way = 0;
+            if ( invrtCache.get(physicalAddr, &row, &way) ) {
+                validBit[row][way] = false;
+           }
+        }
+
+        void handleReq(BOOL readReq, BOOL invalAlias, UINT32 row, UINT32 addrTag, UINT32 physicalAddr)
         {
             incReq(readReq);
-            for (int i = 0; i < associativity; ++i) {
+            for (INT64 i = 0; i < INT64(associativity); ++i) {
                 if (validBit[row][i] && addrTag == tag[row][i]) {
                     incHit(readReq);
-                    lruTable(row, i).touch();
+                    lruTable.touch(row, i);
                     return;
                 }
             }
-            for (int i = 0; i < associativity; ++i) {
+            if (invalAlias) {  
+		  invalidateAliasing(physicalAddr);
+            }
+            for (INT64 i = 0; i < INT64(associativity); ++i) {
                 if ( !validBit[row][i] ) {
-                    evict(row, i, addrTag);
+                    evict(row, i, addrTag, physicalAddr);
                     return;
                 }
             }
-            evict(row, lruTable.front(row), addrTag);
+            evict(row, lruTable.front(row), addrTag, physicalAddr);
         }
 
-        LruTable lruTable;
-
-//        struct Pos {
-//            UINT32 row;
-//            UINT32 way;
-//        };
-//
-//        std::map<UINT32, Pos> invertedTabel;
-
+        LruTable      lruTable;
+        InvertedCache invrtCache;
 };
 
 class LruPhysIndexPhysTagCacheModel: public LruAliasingFreeCacheModel
@@ -202,13 +255,13 @@ class LruPhysIndexPhysTagCacheModel: public LruAliasingFreeCacheModel
         void readReq(UINT32 virtualAddr)
         {
             UINT32 physicalAddr = getPhysicalAddr(virtualAddr);
-            handleReadReq(true, false, getRow(physicalAddr), getTag(physicalAddr));
+            handleReq(true, false, getRow(physicalAddr), getTag(physicalAddr), physicalAddr);
         }
 
         void writeReq(UINT32 virtualAddr)
         {
             UINT32 physicalAddr = getPhysicalAddr(virtualAddr);
-            handleWriteReq(false, false, getRow(physicalAddr), getTag(physicalAddr));
+            handleReq(false, false, getRow(physicalAddr), getTag(physicalAddr), physicalAddr);
         }
 };
 
@@ -218,18 +271,20 @@ class LruVirIndexPhysTagCacheModel: public LruAliasingFreeCacheModel
         LruVirIndexPhysTagCacheModel(UINT32 logNumRowsParam, UINT32 logBlockSizeParam, UINT32 associativityParam)
             : LruAliasingFreeCacheModel(logNumRowsParam, logBlockSizeParam, associativityParam)
         {
+	    if (logNumRows + logBlockSize > logPageSize) 
+	        tagMask = ~((1u << logPageSize) - 1);
         }
 
         void readReq(UINT32 virtualAddr)
         {
             UINT32 physicalAddr = getPhysicalAddr(virtualAddr);
-            handleReadReq(true, true, getRow(virtualAddr), getTag(physicalAddr));
+            handleReq(true, true, getRow(virtualAddr), getTag(physicalAddr), physicalAddr);
         }
 
         void writeReq(UINT32 virtualAddr)
         {
             UINT32 physicalAddr = getPhysicalAddr(virtualAddr);
-            handleWriteReq(false, true, getRow(virtualAddr), getTag(physicalAddr));
+            handleReq(false, true, getRow(virtualAddr), getTag(physicalAddr), physicalAddr);
         }
 };
 
@@ -243,12 +298,14 @@ class LruVirIndexVirTagCacheModel: public LruAliasingFreeCacheModel
 
         void readReq(UINT32 virtualAddr)
         {
-            handleReadReq(true, true, getRow(virtualAddr), getTag(virtualAddr));
+            UINT32 physicalAddr = getPhysicalAddr(virtualAddr); 
+            handleReq(true, true, getRow(virtualAddr), getTag(virtualAddr), physicalAddr);
         }
 
         void writeReq(UINT32 virtualAddr)
         {
-            handleWriteReq(false, true, getRow(virtualAddr), getTag(virtualAddr));
+            UINT32 physicalAddr = getPhysicalAddr(virtualAddr);
+            handleReq(false, true, getRow(virtualAddr), getTag(virtualAddr), physicalAddr);
         }
 };
 
@@ -286,15 +343,15 @@ KNOB<UINT32> KnobLogPageSize(KNOB_MODE_WRITEONCE, "pintool",
 
 // This knob will set the cache param logNumRows
 KNOB<UINT32> KnobLogNumRows(KNOB_MODE_WRITEONCE, "pintool",
-                "r", "10", "specify the log of number of rows in the cache");
+                "r", "11", "specify the log of number of rows in the cache");
 
 // This knob will set the cache param logBlockSize
 KNOB<UINT32> KnobLogBlockSize(KNOB_MODE_WRITEONCE, "pintool",
-                "b", "5", "specify the log of block size of the cache in bytes");
+                "b", "2", "specify the log of block size of the cache in bytes");
 
 // This knob will set the cache param associativity
 KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
-                "a", "2", "specify the associativity of the cache");
+                "a", "1", "specify the associativity of the cache");
 
 // Pin calls this function every time a new instruction is encountered
 VOID Instruction(INS ins, VOID *v)
