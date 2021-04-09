@@ -133,7 +133,7 @@ class InvertedCache {
         }
 
         bool get(UINT32 physicalAddr, UINT32* row, UINT32* way) {
-            UINT32 idx = getRow(physicalAddr);
+            UINT32 idx = getIdx(physicalAddr);
             if (table.at(idx).valid) {
                 *row = table.at(idx).row;
                 *way = table.at(idx).way;
@@ -317,9 +317,13 @@ class LruVirIndexVirTagCacheModel: public LruAliasingFreeCacheModel
         }
 };
 
+UINT32 unalignedMemAccess;
+
 //Cache analysis routine
-void cacheLoad(UINT32 virtualAddr)
+void cacheLoad(UINT32 virtualAddr, USIZE memSize)
 {
+    assert(memSize > 0);
+    unalignedMemAccess += 1; // (virtualAddr % memSize != 0) ? 1 : 0;
     //Here the virtual address is aligned to a word boundary
     virtualAddr = (virtualAddr >> 2) << 2;
     cachePP->readReq(virtualAddr);
@@ -328,8 +332,10 @@ void cacheLoad(UINT32 virtualAddr)
 }
 
 //Cache analysis routine
-void cacheStore(UINT32 virtualAddr)
+void cacheStore(UINT32 virtualAddr, USIZE memSize)
 {
+    assert(memSize > 0);
+    unalignedMemAccess += (virtualAddr % memSize != 0) ? 1 : 0;
     //Here the virtual address is aligned to a word boundary
     virtualAddr = (virtualAddr >> 2) << 2;
     cachePP->writeReq(virtualAddr);
@@ -351,7 +357,7 @@ KNOB<UINT32> KnobLogPageSize(KNOB_MODE_WRITEONCE, "pintool",
 
 // This knob will set the cache param logNumRows
 KNOB<UINT32> KnobLogNumRows(KNOB_MODE_WRITEONCE, "pintool",
-                "r", "11", "specify the log of number of rows in the cache");
+                "r", "7", "specify the log of number of rows in the cache");
 
 // This knob will set the cache param logBlockSize
 KNOB<UINT32> KnobLogBlockSize(KNOB_MODE_WRITEONCE, "pintool",
@@ -359,15 +365,15 @@ KNOB<UINT32> KnobLogBlockSize(KNOB_MODE_WRITEONCE, "pintool",
 
 // This knob will set the cache param associativity
 KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
-                "a", "1", "specify the associativity of the cache");
+                "a", "8", "specify the associativity of the cache");
 
 // Pin calls this function every time a new instruction is encountered
 VOID Instruction(INS ins, VOID *v)
 {
     if(INS_IsMemoryRead(ins))
-        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)cacheLoad, IARG_MEMORYREAD_EA, IARG_END);
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)cacheLoad, IARG_MEMORYREAD_EA, IARG_MEMORYREAD_SIZE, IARG_END);
     if(INS_IsMemoryWrite(ins))
-        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)cacheStore, IARG_MEMORYWRITE_EA, IARG_END);
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)cacheStore, IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_END);
 }
 
 // This function is called when the application exits
@@ -395,6 +401,7 @@ int main(int argc, char * argv[])
     pageOffsetMask = (1u << logPageSize) - 1;
     printf("pageOffsetMask: %u\n", pageOffsetMask);
     logPhysicalMemSize = KnobLogPhysicalMemSize.Value();
+    unalignedMemAccess = 0;
 
     cachePP = new LruPhysIndexPhysTagCacheModel(KnobLogNumRows.Value(), KnobLogBlockSize.Value(), KnobAssociativity.Value()); 
     cacheVP = new LruVirIndexPhysTagCacheModel(KnobLogNumRows.Value(), KnobLogBlockSize.Value(), KnobAssociativity.Value());
