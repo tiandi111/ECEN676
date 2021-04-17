@@ -223,7 +223,8 @@ public:
     Page* pageAtAddress(UINT32 address) {
         if (_page_map.find(address) != _page_map.end())
             return _page_map[address];
-        return nullptr;
+//        return nullptr;
+        return NULL;
     }
 
     void freePage(UINT32 page_addr) {
@@ -241,7 +242,7 @@ public:
     virtual UINT32 victim() = 0;
 };
 
-class PageTableRandomReplAdvisor : PageTableReplAdvisor {
+class PageTableRandomReplAdvisor : public PageTableReplAdvisor {
 private:
     std::set<UINT32>    pageSet;
     std::vector<UINT32> pageVec;
@@ -449,7 +450,7 @@ int main(int argc, char * argv[])
     pageAllocator = new PageAllocator(logPageSize, KnobLogPoolSize.Value());
     tlb = new LruTLB(KnobLogNumRows.Value(), KnobAssociativity.Value());
     rootPage = pageAllocator->pageAtAddress(pageAllocator->requestPage());
-    flushPage(rootPage->address());
+    flushPage(rootPage);
     pageTableReplAdvisor = new PageTableRandomReplAdvisor();
 
     // Register Instruction to be called to instrument instructions
