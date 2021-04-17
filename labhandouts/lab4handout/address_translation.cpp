@@ -239,7 +239,7 @@ public:
     virtual VOID visit(UINT32 pageAddr) = 0;
 
     virtual UINT32 victim() = 0;
-}
+};
 
 class PageTableRandomReplAdvisor : PageTableReplAdvisor {
 private:
@@ -338,10 +338,9 @@ std::map<UINT32, UINT64> invertedPageTable;
 
 PageTableReplAdvisor* pageTableReplAdvisor;
 
-
 VOID flushPage(Page* page) {
     if (!page) return;
-    for (INT64 i = 0; i < (1U << logFrameSize) / sizeof(UINT32); ++i) {
+    for (INT64 i = 0; i < (1U << logPageSize) / sizeof(UINT32); ++i) {
         page->setWordAt(0, i);
     }
 }
@@ -353,7 +352,6 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
     UINT32 level = numPageTableBits / numPageEntry;
     UINT32 pageTableMask = (1U << (logPageSize - 2)) - 1;
     UINT32 shift = 32;
-    UINT32 row = 0;
 
     // make sure level is 2
     assert((level == 2) && (numPageTableBits % numPageEntry == 0));
@@ -371,8 +369,8 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
         // page fault
         if (nextPageAddr == 0) {
 
-            Page* newPage = pageAllocator->requestPage();
-            nextPageAddr = newPage->address();
+            nextPageAddr = pageAllocator->requestPage();
+            Page* newPage = pageAllocator->pageAtAddress(nextPageAddr);
 
             // page eviction
             if (!newPage) {
@@ -382,10 +380,10 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
                 // invalidate entry from parent page
                 if (invertedPageTable.find(nextPageAddr) != invertedPageTable.end()) {
                     UINT64 parentPageInfo = invertedPageTable[nextPageAddr];
-                    pageAllocator->pageAtAddress(parentPageInfo & pageAddrMask).setWordAt(0, arentPageInfo & pageRowMask);
+                    pageAllocator->pageAtAddress(parentPageInfo & pageAddrMask)->setWordAt(0, parentPageInfo & pageRowMask);
                 }
                 // clear parent-child relations for child pages
-                for (int j = 0; j < (1U << logFrameSize) / sizeof(UINT32); ++j) {
+                for (int j = 0; j < (1U << logPageSize) / sizeof(UINT32); ++j) {
                     UINT32 childPageAddr = newPage->wordAt(j);
                     if (childPageAddr != 0)
                         invertedPageTable.erase(newPage->wordAt(j));
@@ -448,11 +446,11 @@ int main(int argc, char * argv[])
     PIN_Init(argc, argv);
 	
     logPageSize = KnobLogPageSize.Value();
-    pageAllocator = new PageAllocator(KnobLogNumRows.Value(), KnobLogPoolSize.Value());
+    pageAllocator = new PageAllocator(logPageSize, KnobLogPoolSize.Value());
     tlb = new LruTLB(KnobLogNumRows.Value(), KnobAssociativity.Value());
     rootPage = pageAllocator->pageAtAddress(pageAllocator->requestPage());
     flushPage(rootPage->address());
-    pageTableReplAdvisor = new PageTableRandomReplAdvisor(0);
+    pageTableReplAdvisor = new PageTableRandomReplAdvisor();
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
