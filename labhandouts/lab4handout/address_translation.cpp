@@ -10,6 +10,7 @@
 #include <time.h>
 #include <stack>
 #include <set>
+#include <list>
 #include "pin.H"
 
 using namespace std;
@@ -117,7 +118,7 @@ public:
                 return phyAddrs[row][i];
             }
         }
-        misCount++;
+        missCount++;
         return 0;
     }
 
@@ -146,7 +147,7 @@ public:
 
     void flush() {
         flushCount++;
-        for (INT64 i = 0; i < INT64(rowNums); ++i) {
+        for (INT64 i = 0; i < INT64(numRows); ++i) {
             for (INT64 j = 0; j < INT64(associativity); ++j)
                 validBits[i][j] = false;
         }
@@ -195,7 +196,7 @@ private:
 public:
 
     PageAllocator(UINT32 logFrameSize, UINT32 logPoolSize) {
-        Page* temp = nullptr;
+        Page* temp = NULL;
         _pool_size = 1U << logPoolSize;
         _frame_size = 1U << logFrameSize;
         _start_address = _frame_size;
@@ -233,12 +234,12 @@ public:
 
 class PageTableReplAdvisor {
 public:
-    ~PageTableReplAdvisor() = 0;
+    virtual ~PageTableReplAdvisor() = 0;
 
-    VOID visit(UINT32 pageAddr) = 0;
+    virtual VOID visit(UINT32 pageAddr) = 0;
 
-    UINT32 victim() = 0;
-};
+    virtual UINT32 victim() = 0;
+}
 
 class PageTableRandomReplAdvisor : PageTableReplAdvisor {
 private:
@@ -331,8 +332,8 @@ UINT32 logPageSize;
 UINT32 frameSize;
 PageAllocator* pageAllocator;
 
-UINT64 pageAddrMask = (~0) >> 32;
-UINT64 pageRowMask = (~0) << 32;
+UINT64 pageAddrMask = UINT64(~0) >> 32;
+UINT64 pageRowMask = UINT64 (~0) << 32;
 std::map<UINT32, UINT64> invertedPageTable;
 
 PageTableReplAdvisor* pageTableReplAdvisor;
@@ -340,7 +341,7 @@ PageTableReplAdvisor* pageTableReplAdvisor;
 
 VOID flushPage(Page* page) {
     if (!page) return;
-    for (INT64 i = 0; i < (1U << logFrameSiz) / sizeof(UINT32); ++i) {
+    for (INT64 i = 0; i < (1U << logFrameSize) / sizeof(UINT32); ++i) {
         page->setWordAt(0, i);
     }
 }
