@@ -327,7 +327,6 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
 
         // page fault
         if (nextPageAddr == 0) {
-
             // request new page
             nextPageAddr = pageAllocator->requestPage();
             Page* newPage = pageAllocator->pageAtAddress(nextPageAddr);
@@ -349,13 +348,13 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
                         invertedPageTable.erase(newPage->wordAt(j));
                 }
 
-                flushPage(newPage);
-
                 curPage->setWordAt(nextPageAddr, row);
                 invertedPageTable[nextPageAddr] = (UINT64(row) << 32) | UINT64(nextPageAddr);
 
                 tlb->flush();
             }
+
+            flushPage(newPage);
         }
 
         curPage = pageAllocator->pageAtAddress(nextPageAddr);
