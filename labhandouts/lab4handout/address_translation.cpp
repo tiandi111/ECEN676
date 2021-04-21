@@ -74,32 +74,37 @@ private:
     UINT32 flushCount;
     UINT32 logNumRows;
     UINT32 associativity;
+    UINT32 logPageSize;
     UINT32 numRows;
     UINT32 rowMask;
+    UINT32 pageNoMask;
 
-    UINT32** virtAddrs;
-    UINT32** phyAddrs;
+    UINT32** virtPageNo;
+    UINT32** phyPageAddr;
     BOOL**   validBits;
     LruTable lruTable;
 
-    UINT32 getRow(UINT32 virtualAddr) { return virtualAddr & rowMask; }
+    UINT32 getRow(UINT32 virtualAddr) { return (virtualAddr & rowMask) >> logPageSize; }
 
 public:
-    LruTLB(UINT32 logNumRowsParam, UINT32 associativityParam)
+    LruTLB(UINT32 logNumRowsParam, UINT32 associativityParam, UINT32 logPageSizeParam)
     : logNumRows(logNumRowsParam),
       associativity(associativityParam),
+      logPageSize(logPageSizeParam),
       numRows(1u << logNumRowsParam),
-      rowMask((1u << logNumRowsParam) - 1),
+      rowMask( ((1u << logNumRowsParam) - 1) << logPageSize ),
+      pageNoMask( ~((1u << logPageSize) - 1) ),
       lruTable(numRows) {
+        assert(logNumRowsParam + logPageSize < 32);
 
-        virtAddrs = new UINT32*[numRows];
-        phyAddrs = new UINT32*[numRows];
+        virtPageNo = new UINT32*[numRows];
+        phyPageAddr = new UINT32*[numRows];
         validBits = new BOOL*[numRows];
 
         for (INT64 i = 0; i < INT64(numRows); ++i) {
 
-            virtAddrs[i] = new UINT32[associativity];
-            phyAddrs[i] = new UINT32[associativity];
+            virtPageNo[i] = new UINT32[associativity];
+            phyPageAddr[i] = new UINT32[associativity];
             validBits[i] = new BOOL[associativity];
 
             for (INT64 j = 0; j < INT64(associativity); ++j)
@@ -112,10 +117,10 @@ public:
     UINT32 physicalPage(UINT32 virtualAddr) {
         UINT32 row = getRow(virtualAddr);
         for (INT64 i = 0; i < INT64(associativity); ++i) {
-            if (validBits[row][i] && virtAddrs[row][i] == virtualAddr) {
+            if (validBits[row][i] && (virtPageNo[row][i] == (virtualAddr & pageNoMask) ) ) {
                 hitCount++;
                 lruTable.touch(row, i);
-                return phyAddrs[row][i];
+                return phyPageAddr[row][i];
             }
         }
         missCount++;
@@ -124,18 +129,17 @@ public:
 
     void cacheTranslation(UINT32 virtualAddr, UINT32 translation) {
         UINT32 row = getRow(virtualAddr);
+        UINT32 victim = associativity;
         for (INT64 i = 0; i < INT64(associativity); ++i) {
             if (!validBits[row][i]) {
-                virtAddrs[row][i] = virtualAddr;
-                phyAddrs[row][i] = translation;
-                validBits[row][i] = true;
-                lruTable.touch(row, i);
-                return;
+                victim = i;
+                break;
             }
         }
-        UINT32 victim = lruTable.back(row);
-        virtAddrs[row][victim] = virtualAddr;
-        phyAddrs[row][victim] = translation;
+        UINT32 victim = victim == associativity ? lruTable.back(row) : victim;
+        virtPageNo[row][victim] = virtualAddr & pageNoMask;
+        phyPageAddr[row][victim] = translation;
+        validBits[row][victim] = true;
         lruTable.touch(row, victim);
     }
 
@@ -152,6 +156,10 @@ public:
                 validBits[i][j] = false;
         }
     }
+
+//    void flush(UINT32 pageAddr) {
+//        UINT32 row = getRow(virtualAddr);
+//    }
 };
 
 class Page {
@@ -236,8 +244,6 @@ public:
 class PageTableReplAdvisor {
 public:
     PageTableReplAdvisor() {};
-
-//    virtual ~PageTableReplAdvisor() = 0;
 
     virtual VOID visit(UINT32 pageAddr) = 0;
 
