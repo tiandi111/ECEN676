@@ -129,14 +129,13 @@ public:
 
     void cacheTranslation(UINT32 virtualAddr, UINT32 translation) {
         UINT32 row = getRow(virtualAddr);
-        UINT32 victim = associativity;
-        for (INT64 i = 0; i < INT64(associativity); ++i) {
-            if (!validBits[row][i]) {
-                victim = i;
+        UINT32 victim = 0;
+        for (; victim < INT64(associativity); ++victim) {
+            if (!validBits[row][victim])
                 break;
-            }
         }
-        UINT32 victim = victim == associativity ? lruTable.back(row) : victim;
+        if (victim == associativity)
+            victim = lruTable.back(row);
         virtPageNo[row][victim] = virtualAddr & pageNoMask;
         phyPageAddr[row][victim] = translation;
         validBits[row][victim] = true;
