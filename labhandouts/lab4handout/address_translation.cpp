@@ -250,11 +250,11 @@ private:
     std::vector<UINT32> pageVec;
 
 public:
-    PageTableRandomReplAdvisor() {
+    RandomPageTableReplAdvisor() {
         srand(time(NULL));
     };
 
-    ~PageTableRandomReplAdvisor() {};
+    ~RandomPageTableReplAdvisor() {};
 
     VOID visit(UINT32 pageAddr) {
         if (pageSet.find(pageAddr) != pageSet.end()) return;
