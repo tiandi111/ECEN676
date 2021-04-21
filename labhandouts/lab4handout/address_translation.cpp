@@ -25,7 +25,7 @@ KNOB<UINT32> KnobLogPageSize(KNOB_MODE_WRITEONCE, "pintool",
 
 // This knob will set the cache param logNumRows
 KNOB<UINT32> KnobLogNumRows(KNOB_MODE_WRITEONCE, "pintool",
-                            "r", "10", "specify the log of number of rows in the cache");
+                            "r", "11", "specify the log of number of rows in the cache");
 
 // This knob will set the cache param associativity
 KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
@@ -235,7 +235,9 @@ public:
 
 class PageTableReplAdvisor {
 public:
-    virtual ~PageTableReplAdvisor() = 0;
+    PageTableReplAdvisor() {};
+
+//    virtual ~PageTableReplAdvisor() = 0;
 
     virtual VOID visit(UINT32 pageAddr) = 0;
 
@@ -248,9 +250,11 @@ private:
     std::vector<UINT32> pageVec;
 
 public:
-    PageTableRandomReplAdvisor() {
+    RandomPageTableReplAdvisor() {
         srand(time(NULL));
     };
+
+    ~RandomPageTableReplAdvisor() {};
 
     VOID visit(UINT32 pageAddr) {
         if (pageSet.find(pageAddr) != pageSet.end()) return;
