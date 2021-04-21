@@ -244,7 +244,7 @@ public:
     virtual UINT32 victim() = 0;
 };
 
-class PageTableRandomReplAdvisor : public PageTableReplAdvisor {
+class RandomPageTableReplAdvisor : public PageTableReplAdvisor {
 private:
     std::set<UINT32>    pageSet;
     std::vector<UINT32> pageVec;
@@ -267,68 +267,26 @@ public:
     }
 };
 
-//class PageTableLruManager {
-//private:
-//    struct Entry {
-//        Page*  page;
-//        Page*  parent;
-//        UINT32 row;
-//
-//        Entry(Page* _page, Page* _parent, UINT32 _row)
-//        : page(_page), parent(_parent), row(_row) {}
-//    };
-//
-//    typedef std::list<Entry>           ppLruList;
-//    typedef std::list<Entry>::iterator ppLruListIter;
-//
-//    ppLruList                      lruList;
-//    std::map<Page*, ppLruListIter> lruMap;
-//
-//public:
-//    PageTableLruManager() {}
-//
-//    void touch(Page* page, Page* parent, UINT32 row) {
-//        Entry entry(page, parent, row);
-//        if (lruMap.find(page) != lruMap.end()) {
-//            lruList.erase(lruMap[page]);
-//        }
-//        lruList.push_front(entry);
-//        lruMap[page] = lruList.begin();
-//    }
-//
-//    Page* back(Page** parent, UINT32* row) {
-//        Entry entry = lruList.back();
-//        if (parent) *parent = entry.parent;
-//        if (row) *row = entry.row;
-//        return entry.page;
-//    }
-//};
+class LruPageTableReplAdvisor : public PageTableReplAdvisor {
+private:
+    std::list<UINT32> list;
+    std::map<UINT32, std::list<UINT32>::iterator> map;
 
-//class InvertedPageTable {
-//private:
-//    std::map<UINT32, UINT64> pageTable;
-//
-//public:
-//    InvertedPageTable() {};
-//
-//
-//
-//    UINT32 getParentPageAddr(UINT32 pageAddr) {
-//        return
-//    }
-//
-//    UINT32 getRowInParent(UINT32 pageAddr) {
-//
-//    }
-//
-//    VOID erase(UINT32 pageAddr) {
-//
-//    }
-//
-//    VOID insert(UINT32 parentPageAddr, UINT32 row) {
-//
-//    }
-//};
+public:
+    LruPageTableReplAdvisor() {}
+
+    VOID visit(UINT32 pageAddr) {
+        if (map.find(pageAddr) != map.end()) {
+            list.erase(map[pageAddr]);
+        }
+        list.push_front(pageAddr);
+        map[pageAddr] = list.begin();
+    }
+
+    UINT32 victim() {
+        return list.back();
+    }
+};
 
 LruTLB* tlb;
 Page* rootPage;
@@ -374,6 +332,7 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
         // page fault
         if (nextPageAddr == 0) {
 
+            // request new page
             nextPageAddr = pageAllocator->requestPage();
             Page* newPage = pageAllocator->pageAtAddress(nextPageAddr);
 
@@ -455,7 +414,8 @@ int main(int argc, char * argv[])
     tlb = new LruTLB(KnobLogNumRows.Value(), KnobAssociativity.Value());
     rootPage = pageAllocator->pageAtAddress(pageAllocator->requestPage());
     flushPage(rootPage);
-    pageTableReplAdvisor = new PageTableRandomReplAdvisor();
+//    pageTableReplAdvisor = new RandomPageTableReplAdvisor();
+    pageTableReplAdvisor = new LruPageTableReplAdvisor();
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
