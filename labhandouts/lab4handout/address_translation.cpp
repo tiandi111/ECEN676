@@ -136,7 +136,7 @@ public:
                 break;
             }
         }
-        UINT32 victim = victim == associativity ? lruTable.back(row) : victim;
+        victim = victim == associativity ? lruTable.back(row) : victim;
         virtPageNo[row][victim] = virtualAddr & pageNoMask;
         phyPageAddr[row][victim] = translation;
         validBits[row][victim] = true;
@@ -416,11 +416,11 @@ int main(int argc, char * argv[])
 	
     logPageSize = KnobLogPageSize.Value();
     pageAllocator = new PageAllocator(logPageSize, KnobLogPoolSize.Value());
-    tlb = new LruTLB(KnobLogNumRows.Value(), KnobAssociativity.Value());
+    tlb = new LruTLB(KnobLogNumRows.Value(), KnobAssociativity.Value(), logPageSize);
     rootPage = pageAllocator->pageAtAddress(pageAllocator->requestPage());
     flushPage(rootPage);
-//    pageTableReplAdvisor = new RandomPageTableReplAdvisor();
-    pageTableReplAdvisor = new LruPageTableReplAdvisor();
+    pageTableReplAdvisor = new RandomPageTableReplAdvisor();
+//    pageTableReplAdvisor = new LruPageTableReplAdvisor();
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
