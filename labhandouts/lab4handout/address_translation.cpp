@@ -53,7 +53,7 @@ public:
     }
 
     void touch(UINT32 row, UINT32 key) {
-	assert(row < lruMaps.size() && row < lruLists.size());
+	      assert(row < lruMaps.size() && row < lruLists.size());
         lruMap& map = lruMaps.at(row);
         lruList& list = lruLists.at(row);
         if (map.end() != map.find(key)) {
@@ -64,7 +64,7 @@ public:
     }
 
     UINT32 back(UINT32 row) {
-	assert(row < lruLists.size() && lruLists.at(row).size() > 0);	
+	      assert(row < lruLists.size() && lruLists.at(row).size() > 0);
         return lruLists.at(row).back();
     }
 };
@@ -86,7 +86,11 @@ private:
     BOOL**   validBits;
     LruTable lruTable;
 
-    UINT32 getRow(UINT32 virtualAddr) { return (virtualAddr & rowMask) >> logPageSize; }
+    UINT32 getRow(UINT32 virtualAddr) {
+        UINT32 row = (virtualAddr & rowMask) >> logPageSize;
+        assert(row < numRows);
+        return row;
+    }
 
 public:
     LruTLB(UINT32 logNumRowsParam, UINT32 associativityParam, UINT32 logPageSizeParam)
@@ -115,10 +119,8 @@ public:
 
     }
 
-    // todo: mask the virtual address?
     UINT32 physicalPage(UINT32 virtualAddr) {
         UINT32 row = getRow(virtualAddr);
-	assert(row < numRows);
         for (INT64 i = 0; i < INT64(associativity); ++i) {
             if (validBits[row][i] && (virtPageNo[row][i] == (virtualAddr & pageNoMask) ) ) {
                 hitCount++;
@@ -132,13 +134,12 @@ public:
 
     void cacheTranslation(UINT32 virtualAddr, UINT32 translation) {
         UINT32 row = getRow(virtualAddr);
-	assert(row < numRows);
         UINT32 victim = 0;
         for (; ( victim < INT64(associativity) ) && validBits[row][victim]; ++victim) {}
         if (UINT32(victim) == UINT32(associativity)) { 
             victim = lruTable.back(row);
-	}
-	assert(victim < associativity);
+	      }
+	      assert(victim < associativity);
         virtPageNo[row][victim] = virtualAddr & pageNoMask;
         phyPageAddr[row][victim] = translation;
         validBits[row][victim] = true;
@@ -151,6 +152,7 @@ public:
 
     UINT32 numFlushes() { return flushCount; }
 
+    // full flush
     void flush() {
         flushCount++;
         for (INT64 i = 0; i < INT64(numRows); ++i) {
@@ -159,9 +161,16 @@ public:
         }
     }
 
-//    void flush(UINT32 pageAddr) {
-//        UINT32 row = getRow(virtualAddr);
-//    }
+    // selective flush
+    void flush(UINT32 virtualAddr) {
+        UINT32 row = getRow(virtualAddr);
+        for (INT64 i = 0; i < INT64(associativity); ++i) {
+            if (validBits[row][i] && (virtPageNo[row][i] == (virtualAddr & pageNoMask)) ) {
+                validBits[row][i] = false;
+                return;
+            }
+        }
+    }
 };
 
 class Page {
@@ -296,18 +305,48 @@ public:
     }
 };
 
-LruTLB* tlb;
-Page* rootPage;
-UINT32 logPoolSize;
-UINT32 logPageSize;
-UINT32 frameSize;
-PageAllocator* pageAllocator;
+class InvertedPageTable {
+public:
+    struct PageInfo {
+        UINT32 virtualAddr;
+        UINT32 parentAddr;
+        UINT32 row;
 
-UINT64 pageAddrMask = UINT64(~0) >> 32;
-UINT64 pageRowMask = UINT64 (~0) << 32;
-std::map<UINT32, UINT64> invertedPageTable;
+        PageInfo(UINT32 _virtualAddr, UINT32 _parentAddr, UINT32 _row)
+        : virtualAddr(_virtualAddr),
+          parentAddr(_parentAddr),
+          row(_row) {}
+    };
 
-PageTableReplAdvisor* pageTableReplAdvisor;
+    InvertedPageTable() {}
+
+    PageInfo* get(UINT32 pageAddr) {
+        if (table.find(pageAddr) != table.end()) {
+            return &(table[pageAddr]);
+        }
+        return NULL;
+    }
+
+    VOID set(UINT32 pageAddr, UINT32 virtualAddr, UINT32 parentAddr, UINT32 row) {
+        table[pageAddr] = PageInfo(virtualAddr, parentAddr, row);
+    }
+
+    UINT32 erase(UINT32 pageAddr) {
+        return table.erase(pageAddr);
+    }
+
+private:
+    std::map<UINT32, pageInfo> table;
+};
+
+LruTLB*                 tlb;
+Page*                   rootPage;
+UINT32                  logPoolSize;
+UINT32                  logPageSize;
+UINT32                  frameSize;
+PageAllocator*          pageAllocator;
+InvertedPageTable       invertedPageTable;
+PageTableReplAdvisor*   pageTableReplAdvisor;
 
 VOID flushPage(Page* page) {
     if (!page) return;
@@ -348,24 +387,24 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
                 newPage = pageAllocator->pageAtAddress(pageTableReplAdvisor->victim());
                 nextPageAddr = newPage->address();
 
+                PageInfo * pageInfo = invertedPageTable.get(nextPageAddr);
                 // invalidate entry from parent page
-                if (invertedPageTable.find(nextPageAddr) != invertedPageTable.end()) {
-                    UINT64 parentPageInfo = invertedPageTable[nextPageAddr];
-                    pageAllocator->pageAtAddress(parentPageInfo & pageAddrMask)->setWordAt(0, parentPageInfo & pageRowMask);
-                }
+                if (pageInfo->parentAddr != 0)
+                    pageAllocator->pageAtAddress(pageInfo->parentAddr)->setWordAt(0, pageInfo->row);
+                tlb->flush(pageInfo->virtualAddr);
                 // clear parent-child relations for child pages
                 for (int j = 0; j < (1U << logPageSize) / sizeof(UINT32); ++j) {
                     UINT32 childPageAddr = newPage->wordAt(j);
-                    if (childPageAddr != 0)
-                        invertedPageTable.erase(newPage->wordAt(j));
+                    if (childPageAddr != 0) {
+                        invertedPageTable.get(childPageAddr)->parentAddr = 0;
+                    }
                 }
 
-                curPage->setWordAt(nextPageAddr, row);
-                invertedPageTable[nextPageAddr] = (UINT64(row) << 32) | UINT64(nextPageAddr);
-
-                tlb->flush();
+//                tlb->flush();
             }
 
+            curPage->setWordAt(nextPageAddr, row);
+            invertedPageTable.set(nextPageAddr, virtualAddr, curPage->address(), row);
             flushPage(newPage);
         }
 
