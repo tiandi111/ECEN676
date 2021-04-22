@@ -25,7 +25,7 @@ KNOB<UINT32> KnobLogPageSize(KNOB_MODE_WRITEONCE, "pintool",
 
 // This knob will set the cache param logNumRows
 KNOB<UINT32> KnobLogNumRows(KNOB_MODE_WRITEONCE, "pintool",
-                            "r", "11", "specify the log of number of rows in the cache");
+                            "r", "10", "specify the log of number of rows in the cache");
 
 // This knob will set the cache param associativity
 KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
@@ -53,8 +53,9 @@ public:
     }
 
     void touch(UINT32 row, UINT32 key) {
-        lruMap map = lruMaps.at(row);
-        lruList list = lruLists.at(row);
+	assert(row < lruMaps.size() && row < lruLists.size());
+        lruMap& map = lruMaps.at(row);
+        lruList& list = lruLists.at(row);
         if (map.end() != map.find(key)) {
             list.erase(map[key]);
         }
@@ -63,6 +64,7 @@ public:
     }
 
     UINT32 back(UINT32 row) {
+	assert(row < lruLists.size() && lruLists.at(row).size() > 0);	
         return lruLists.at(row).back();
     }
 };
@@ -116,6 +118,7 @@ public:
     // todo: mask the virtual address?
     UINT32 physicalPage(UINT32 virtualAddr) {
         UINT32 row = getRow(virtualAddr);
+	assert(row < numRows);
         for (INT64 i = 0; i < INT64(associativity); ++i) {
             if (validBits[row][i] && (virtPageNo[row][i] == (virtualAddr & pageNoMask) ) ) {
                 hitCount++;
@@ -129,14 +132,13 @@ public:
 
     void cacheTranslation(UINT32 virtualAddr, UINT32 translation) {
         UINT32 row = getRow(virtualAddr);
-        UINT32 victim = associativity;
-        for (INT64 i = 0; i < INT64(associativity); ++i) {
-            if (!validBits[row][i]) {
-                victim = i;
-                break;
-            }
-        }
-        victim = victim == associativity ? lruTable.back(row) : victim;
+	assert(row < numRows);
+        UINT32 victim = 0;
+        for (; ( victim < INT64(associativity) ) && validBits[row][victim]; ++victim) {}
+        if (UINT32(victim) == UINT32(associativity)) { 
+            victim = lruTable.back(row);
+	}
+	assert(victim < associativity);
         virtPageNo[row][victim] = virtualAddr & pageNoMask;
         phyPageAddr[row][victim] = translation;
         validBits[row][victim] = true;
@@ -332,7 +334,7 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
         shift -= logPageSize - 2;
         UINT32 row = (virtualAddr & (pageTableMask << shift) ) >> shift;
 
-        // find next page
+        // find the next page
         UINT32 nextPageAddr = curPage->wordAt(row);
 
         // page fault
@@ -384,7 +386,7 @@ void translateAddress(UINT32 virtualAddr) {
     UINT32 translation = tlb->physicalPage(virtualAddr);
     if (translation == 0) {
         translation = pageTableWalk(virtualAddr, logPageSize);
-        tlb->cacheTranslation(virtualAddr, translation);
+        tlb->cacheTranslation(virtualAddr, translation); 
     }
 }
 
@@ -419,8 +421,8 @@ int main(int argc, char * argv[])
     tlb = new LruTLB(KnobLogNumRows.Value(), KnobAssociativity.Value(), logPageSize);
     rootPage = pageAllocator->pageAtAddress(pageAllocator->requestPage());
     flushPage(rootPage);
-    pageTableReplAdvisor = new RandomPageTableReplAdvisor();
-//    pageTableReplAdvisor = new LruPageTableReplAdvisor();
+//    pageTableReplAdvisor = new RandomPageTableReplAdvisor();
+    pageTableReplAdvisor = new LruPageTableReplAdvisor();
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
