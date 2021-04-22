@@ -305,19 +305,19 @@ public:
     }
 };
 
-class InvertedPageTable {
-public:
-    struct PageInfo {
-        UINT32 virtualAddr;
-        UINT32 parentAddr;
-        UINT32 row;
+struct PageInfo {
+    UINT32 virtualAddr;
+    UINT32 parentAddr;
+    UINT32 row;
 
-        PageInfo(UINT32 _virtualAddr, UINT32 _parentAddr, UINT32 _row)
+    PageInfo(UINT32 _virtualAddr, UINT32 _parentAddr, UINT32 _row)
         : virtualAddr(_virtualAddr),
           parentAddr(_parentAddr),
           row(_row) {}
-    };
+};
 
+class InvertedPageTable {
+public:
     InvertedPageTable() {}
 
     PageInfo* get(UINT32 pageAddr) {
