@@ -305,6 +305,29 @@ public:
     }
 };
 
+// this is an optimized version of LruPageTableReplAdvisor
+// instead of always evicting the least recently used page, its descendant pages are evicted first.
+class LruPageTableReplAdvisor1 : public LruPageTableReplAdvisor {
+private:
+    UINT32 getLeafPageAddr(UINT32 pageAddr) {
+        Page* page = pageAllocator->pageAtAddress(pageAddr);
+        assert(page);
+        for (int i = 0; i < (1U << logPageSize) / sizeof(UINT32); ++i) {
+            UINT32 childPageAddr = page->wordAt(i);
+            if (childPageAddr != 0)
+                return getLeafPageAddr(childPageAddr);
+        }
+        return pageAddr;
+    }
+
+public:
+    LruPageTableReplAdvisor1() : LruPageTableReplAdvisor() {}
+
+    UINT32 victim() {
+        return getLeafPageAddr(list.back());
+    }
+};
+
 struct PageInfo {
     UINT32 virtualAddr;
     UINT32 parentAddr;
@@ -331,9 +354,9 @@ public:
 
     VOID set(UINT32 pageAddr, UINT32 virtualAddr, UINT32 parentAddr, UINT32 row) {
         table[pageAddr] = PageInfo (virtualAddr, parentAddr, row);
-	assert(table[pageAddr].virtualAddr == virtualAddr &&
-		table[pageAddr].parentAddr == parentAddr &&
-		table[pageAddr].row == row);
+        assert(table[pageAddr].virtualAddr == virtualAddr &&
+                table[pageAddr].parentAddr == parentAddr &&
+                table[pageAddr].row == row);
     }
 
     UINT32 erase(UINT32 pageAddr) {
@@ -465,7 +488,8 @@ int main(int argc, char * argv[])
     rootPage = pageAllocator->pageAtAddress(pageAllocator->requestPage());
     flushPage(rootPage);
 //    pageTableReplAdvisor = new RandomPageTableReplAdvisor();
-    pageTableReplAdvisor = new LruPageTableReplAdvisor();
+//    pageTableReplAdvisor = new LruPageTableReplAdvisor();
+    pageTableReplAdvisor = new LruPageTableReplAdvisor1();
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
