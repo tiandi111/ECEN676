@@ -286,7 +286,7 @@ public:
 };
 
 class LruPageTableReplAdvisor : public PageTableReplAdvisor {
-private:
+protected:
     std::list<UINT32> list;
     std::map<UINT32, std::list<UINT32>::iterator> map;
 
@@ -306,6 +306,39 @@ public:
     }
 };
 
+UINT32 cnt = 0;
+
+// this is an optimized version of LruPageTableReplAdvisor
+// instead of always evicting the least recently used page, its descendant pages are evicted first.
+class LruPageTableReplAdvisor1 : public LruPageTableReplAdvisor {
+private:
+    UINT32 logPageSize;
+    PageAllocator* pageAllocator;
+
+    UINT32 getLeafPageAddr(UINT32 pageAddr) {
+        Page* page = pageAllocator->pageAtAddress(pageAddr);
+        assert(page);
+        for (int i = 0; i < (1U << logPageSize) / sizeof(UINT32); ++i) {
+            UINT32 childPageAddr = page->wordAt(i);
+            if (childPageAddr != 0)
+                return getLeafPageAddr(childPageAddr);
+        }
+        return pageAddr;
+    }
+
+public:
+    LruPageTableReplAdvisor1(UINT32 _logPageSize, PageAllocator* _pageAllocator)
+	: LruPageTableReplAdvisor(),
+	  logPageSize(_logPageSize),
+	  pageAllocator(_pageAllocator) {}
+
+    UINT32 victim() {
+        UINT32 victimPageAddr = getLeafPageAddr(list.back());
+	cnt += victimPageAddr != list.back() ? 1 : 0;
+	return victimPageAddr;
+    }
+};
+
 struct PageInfo {
     UINT32 virtualAddr;
     UINT32 parentAddr;
@@ -314,9 +347,9 @@ struct PageInfo {
     PageInfo() {}
 
     PageInfo(UINT32 _virtualAddr, UINT32 _parentAddr, UINT32 _row)
-        : virtualAddr(_virtualAddr),
-          parentAddr(_parentAddr),
-          row(_row) {}
+    : virtualAddr(_virtualAddr),
+      parentAddr(_parentAddr),
+      row(_row) {}
 };
 
 class InvertedPageTable {
@@ -332,9 +365,9 @@ public:
 
     VOID set(UINT32 pageAddr, UINT32 virtualAddr, UINT32 parentAddr, UINT32 row) {
         table[pageAddr] = PageInfo (virtualAddr, parentAddr, row);
-	assert(table[pageAddr].virtualAddr == virtualAddr &&
-		table[pageAddr].parentAddr == parentAddr &&
-		table[pageAddr].row == row);
+        assert(table[pageAddr].virtualAddr == virtualAddr &&
+                table[pageAddr].parentAddr == parentAddr &&
+                table[pageAddr].row == row);
     }
 
     UINT32 erase(UINT32 pageAddr) {
@@ -405,7 +438,7 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
                     }
                 }
                 tlb->flush(pageInfo->virtualAddr);
-                //tlb->flush();
+//                tlb->flush();
             }
 
             curPage->setWordAt(nextPageAddr, row);
@@ -450,6 +483,7 @@ VOID Fini(INT32 code, VOID *v)
     outfile.open(KnobOutputFile.Value().c_str());
     outfile << "Number of TLB hits: " << tlb->numHits() <<" | Number of TLB misses: "
         << tlb->numMisses() << " | Number of TLB flushes: " << tlb->numFlushes() << std::endl;
+    outfile << "Number of opt replacement: " << cnt << std::endl;
     outfile.close();
 }
 
@@ -467,6 +501,7 @@ int main(int argc, char * argv[])
     flushPage(rootPage);
     pageTableReplAdvisor = new RandomPageTableReplAdvisor();
 //    pageTableReplAdvisor = new LruPageTableReplAdvisor();
+//    pageTableReplAdvisor = new LruPageTableReplAdvisor1(logPageSize, pageAllocator);
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
