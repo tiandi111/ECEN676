@@ -311,9 +311,9 @@ struct PageInfo {
     UINT32 row;
 
     PageInfo(UINT32 _virtualAddr, UINT32 _parentAddr, UINT32 _row)
-        : virtualAddr(_virtualAddr),
-          parentAddr(_parentAddr),
-          row(_row) {}
+    : virtualAddr(_virtualAddr),
+      parentAddr(_parentAddr),
+      row(_row) {}
 };
 
 class InvertedPageTable {
@@ -336,7 +336,7 @@ public:
     }
 
 private:
-    std::map<UINT32, pageInfo> table;
+    std::map<UINT32, PageInfo> table;
 };
 
 LruTLB*                 tlb;
