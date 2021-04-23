@@ -310,6 +310,8 @@ struct PageInfo {
     UINT32 parentAddr;
     UINT32 row;
 
+    PageInfo() {}
+
     PageInfo(UINT32 _virtualAddr, UINT32 _parentAddr, UINT32 _row)
     : virtualAddr(_virtualAddr),
       parentAddr(_parentAddr),
@@ -328,7 +330,10 @@ public:
     }
 
     VOID set(UINT32 pageAddr, UINT32 virtualAddr, UINT32 parentAddr, UINT32 row) {
-        table[pageAddr] = PageInfo(virtualAddr, parentAddr, row);
+        table[pageAddr] = PageInfo (virtualAddr, parentAddr, row);
+	assert(table[pageAddr].virtualAddr == virtualAddr &&
+		table[pageAddr].parentAddr == parentAddr &&
+		table[pageAddr].row == row);
     }
 
     UINT32 erase(UINT32 pageAddr) {
@@ -390,8 +395,7 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
                 PageInfo * pageInfo = invertedPageTable.get(nextPageAddr);
                 // invalidate entry from parent page
                 if (pageInfo->parentAddr != 0)
-                    pageAllocator->pageAtAddress(pageInfo->parentAddr)->setWordAt(0, pageInfo->row);
-                tlb->flush(pageInfo->virtualAddr);
+                    pageAllocator->pageAtAddress(pageInfo->parentAddr)->setWordAt(0, pageInfo->row); 
                 // clear parent-child relations for child pages
                 for (int j = 0; j < (1U << logPageSize) / sizeof(UINT32); ++j) {
                     UINT32 childPageAddr = newPage->wordAt(j);
@@ -399,8 +403,8 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
                         invertedPageTable.get(childPageAddr)->parentAddr = 0;
                     }
                 }
-
-//                tlb->flush();
+                //tlb->flush(pageInfo->virtualAddr);
+                tlb->flush();
             }
 
             curPage->setWordAt(nextPageAddr, row);
