@@ -163,6 +163,7 @@ public:
 
     // selective flush
     void flush(UINT32 virtualAddr) {
+	flushCount++;
         UINT32 row = getRow(virtualAddr);
         for (INT64 i = 0; i < INT64(associativity); ++i) {
             if (validBits[row][i] && (virtPageNo[row][i] == (virtualAddr & pageNoMask)) ) {
@@ -403,8 +404,8 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
                         invertedPageTable.get(childPageAddr)->parentAddr = 0;
                     }
                 }
-                //tlb->flush(pageInfo->virtualAddr);
-                tlb->flush();
+                tlb->flush(pageInfo->virtualAddr);
+                //tlb->flush();
             }
 
             curPage->setWordAt(nextPageAddr, row);
@@ -464,8 +465,8 @@ int main(int argc, char * argv[])
     tlb = new LruTLB(KnobLogNumRows.Value(), KnobAssociativity.Value(), logPageSize);
     rootPage = pageAllocator->pageAtAddress(pageAllocator->requestPage());
     flushPage(rootPage);
-//    pageTableReplAdvisor = new RandomPageTableReplAdvisor();
-    pageTableReplAdvisor = new LruPageTableReplAdvisor();
+    pageTableReplAdvisor = new RandomPageTableReplAdvisor();
+//    pageTableReplAdvisor = new LruPageTableReplAdvisor();
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
