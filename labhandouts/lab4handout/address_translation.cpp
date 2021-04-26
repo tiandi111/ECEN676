@@ -53,15 +53,13 @@ private:
     vector<vector<UINT32> > vecs;
 
 public:
-    RandomReplAdvisor(UINT32 numRows) {
+    RandomReplAdvisor(UINT32 logNumRows) {
         srand(time(NULL));
-        for (INT32 i = 0; i < INT64(numRows); ++i) {
+        for (INT32 i = 0; i < INT64(1U << logNumRows); ++i) {
             sets.push_back(std::set<UINT32> ());
-            vecs.push_back(std::vector<UINT32> ())
+            vecs.push_back(std::vector<UINT32> ());
         }
     };
-
-    ~RandomPageTableReplAdvisor() {};
 
     VOID visit(UINT32 row, UINT32 key) {
         set<UINT32>& set = sets.at(row);
@@ -84,24 +82,26 @@ protected:
     vector<map<UINT32, list<UINT32>::iterator> >    maps;
 
 public:
-    LruReplAdvisor(UINT32 rowNums) {
-        for (INT32 i = 0; i < INT64(numRows); ++i) {
+    LruReplAdvisor(UINT32 logNumRows) {
+        for (INT64 i = 0; i < INT64(1U << logNumRows); ++i) {
             lists.push_back(list<UINT32> ());
-            maps.push_back(map<UINT32, list<UINT32>::iterator> ())
+            maps.push_back(map<UINT32, list<UINT32>::iterator> ());
         }
     }
 
     VOID visit(UINT32 row, UINT32 key) {
-        list<UINT32>& list = lists.at(row);
+	assert(row < lists.size());
+        list<UINT32>& alist = lists.at(row);
         map<UINT32, list<UINT32>::iterator>& map = maps.at(row);
-        if (map.find(key)) != map.end()) {
-            list.erase(map[key]);
+        if (map.find(key) != map.end()) {
+            alist.erase(map[key]);
         }
-        list.push_front(key);
-        map[key] = list.begin();
+        alist.push_front(key);
+        map[key] = alist.begin();
     }
 
     UINT32 victim(UINT32 row) {
+	assert(row < lists.size()); 
         return lists.at(row).back();
     }
 };
@@ -113,10 +113,10 @@ protected:
     vector<vector<UINT32> >  vecs;
 
 public:
-    LruReplAdvisor(UINT32 numRows, UINT32 associativity, UINT32 _maxRpv)
+    SrripAdvisor(UINT32 logNumRows, UINT32 associativity, UINT32 _maxRpv)
     : maxRpv(_maxRpv) {
-        assert(associativity > 0 && );
-        for (INT32 i = 0; i < INT64(numRows); ++i) {
+        assert(associativity > 0);
+        for (INT32 i = 0; i < INT64(1U << logNumRows); ++i) {
             vecs.push_back(vector<UINT32> ());
             for (INT32 j = 0; j < INT64(associativity); ++j) {
                 vecs.at(i).push_back(maxRpv);
@@ -133,7 +133,7 @@ public:
         vector<UINT32>& vec = vecs.at(row);
         UINT32 curMaxRpv = 0;
         UINT32 maxRpvIdx = 0;
-        for (INT32 i = 0; i < INT64(associativity); ++i) {
+        for (INT32 i = 0; i < INT64(vec.size()); ++i) {
             UINT32 rpv = vec.at(i);
             if (rpv >= maxRpv) return i;
             if (rpv > curMaxRpv) {
@@ -141,7 +141,7 @@ public:
                 maxRpvIdx = i;
             }
         }
-        for (INT32 i = 0; i < INT64(associativity); ++i) {
+        for (INT32 i = 0; i < INT64(vec.size()); ++i) {
             vec.at(i) += maxRpv - curMaxRpv;
         }
         return maxRpvIdx;
@@ -149,38 +149,6 @@ public:
 };
 
 UINT32 optReplCnt = 0;
-
-// This is an page table alternative of LruReplAdvisor
-// Instead of always evicting the least recently used page, its descendant pages are evicted firs
-// Note: this class can only be used by page table
-class LruPageTableReplAdvisor1 : public LruPageTableReplAdvisor {
-private:
-    UINT32 logPageSize;
-    PageAllocator* pageAllocator;
-
-    UINT32 getLeafPageAddr(UINT32 pageAddr) {
-        Page* page = pageAllocator->pageAtAddress(pageAddr);
-        assert(page);
-        for (int i = 0; i < (1U << logPageSize) / sizeof(UINT32); ++i) {
-            UINT32 childPageAddr = page->wordAt(i);
-            if (childPageAddr != 0)
-                return getLeafPageAddr(childPageAddr);
-        }
-        return pageAddr;
-    }
-
-public:
-    LruPageTableReplAdvisor1(UINT32 numRows, UINT32 _logPageSize, PageAllocator* _pageAllocator)
-    : LruPageTableReplAdvisor(numRows),
-      logPageSize(_logPageSize),
-      pageAllocator(_pageAllocator) {}
-
-    UINT32 victim(UINT32 row) {
-        UINT32 victimPageAddr = getLeafPageAddr(lists.at(row).back());
-        optReplCnt += victimPageAddr != lists.at(row).back() ? 1 : 0;
-        return victimPageAddr;
-    }
-};
 
 class LruTLB {
 private:
@@ -214,6 +182,7 @@ public:
       pageNoMask( ~((1u << logPageSize) - 1) ),
       repl(_repl) {
         assert(logNumRowsParam + logPageSize < 32);
+        assert(_repl);
 
         virtPageNo = new UINT32*[numRows];
         phyPageAddr = new UINT32*[numRows];
@@ -365,6 +334,38 @@ public:
     }
 };
 
+// This is an page table alternative of LruReplAdvisor
+// Instead of always evicting the least recently used page, its descendant pages are evicted firs
+// Note: this class can only be used by page table
+class LruPageTableReplAdvisor1 : public LruReplAdvisor {
+private:
+    UINT32         logPageSize;
+    PageAllocator* pageAllocator;
+
+    UINT32 getLeafPageAddr(UINT32 pageAddr) {
+        Page* page = pageAllocator->pageAtAddress(pageAddr);
+        assert(page);
+        for (int i = 0; i < (1U << logPageSize) / sizeof(UINT32); ++i) {
+            UINT32 childPageAddr = page->wordAt(i);
+            if (childPageAddr != 0)
+                return getLeafPageAddr(childPageAddr);
+        }
+        return pageAddr;
+    }
+
+public:
+    LruPageTableReplAdvisor1(UINT32 numRows, UINT32 _logPageSize, PageAllocator* _pageAllocator)
+    : LruReplAdvisor(numRows),
+      logPageSize(_logPageSize),
+      pageAllocator(_pageAllocator) {}
+
+    UINT32 victim(UINT32 row) {
+        UINT32 victimPageAddr = getLeafPageAddr(lists.at(row).back());
+        optReplCnt += victimPageAddr != lists.at(row).back() ? 1 : 0;
+        return victimPageAddr;
+    }
+};
+
 struct PageInfo {
     UINT32 virtualAddr;
     UINT32 parentAddr;
@@ -509,7 +510,7 @@ VOID Fini(INT32 code, VOID *v)
     outfile.open(KnobOutputFile.Value().c_str());
     outfile << "Number of TLB hits: " << tlb->numHits() <<" | Number of TLB misses: "
         << tlb->numMisses() << " | Number of TLB flushes: " << tlb->numFlushes() << std::endl;
-    outfile << "Number of opt replacement: " << cnt << std::endl;
+    outfile << "Number of opt replacement: " << optReplCnt << std::endl;
     outfile.close();
 }
 
@@ -523,8 +524,8 @@ int main(int argc, char * argv[])
     // Initialize configuration parameters
     logPageSize = KnobLogPageSize.Value();
     logPoolSize = KnobLogPoolSize.Value();
-    logNumRows = KnobLogNumRows.Value();
-    associativity = KnobAssociativity.Value();
+    UINT32 logNumRows = KnobLogNumRows.Value();
+    UINT32 associativity = KnobAssociativity.Value();
 
     // Initialize Page table
     pageAllocator = new PageAllocator(logPageSize, logPoolSize);
