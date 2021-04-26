@@ -69,6 +69,15 @@ public:
     }
 };
 
+class CacheReplAdvisor {
+public:
+    TlbReplAdvisor() {};
+
+    virtual VOID visit(UINT32 row, UINT32 set) = 0;
+
+    virtual UINT32 victim(UINT32 row) = 0;
+};
+
 class LruTLB {
 private:
     UINT32 missCount;
@@ -253,6 +262,8 @@ public:
     }
 };
 
+// Interface of Page table replacement advisor class
+// All replacement advisor should inherit this class.
 class PageTableReplAdvisor {
 public:
     PageTableReplAdvisor() {};
@@ -262,6 +273,7 @@ public:
     virtual UINT32 victim() = 0;
 };
 
+// Random replacement advisor
 class RandomPageTableReplAdvisor : public PageTableReplAdvisor {
 private:
     std::set<UINT32>    pageSet;
@@ -285,6 +297,7 @@ public:
     }
 };
 
+// Least Recently Used replacement advisor
 class LruPageTableReplAdvisor : public PageTableReplAdvisor {
 protected:
     std::list<UINT32> list;
@@ -308,7 +321,7 @@ public:
 
 UINT32 cnt = 0;
 
-// this is an optimized version of LruPageTableReplAdvisor
+// This is an alternative of LruPageTableReplAdvisor
 // instead of always evicting the least recently used page, its descendant pages are evicted first.
 class LruPageTableReplAdvisor1 : public LruPageTableReplAdvisor {
 private:
@@ -328,14 +341,14 @@ private:
 
 public:
     LruPageTableReplAdvisor1(UINT32 _logPageSize, PageAllocator* _pageAllocator)
-	: LruPageTableReplAdvisor(),
-	  logPageSize(_logPageSize),
-	  pageAllocator(_pageAllocator) {}
+	  : LruPageTableReplAdvisor(),
+	    logPageSize(_logPageSize),
+	    pageAllocator(_pageAllocator) {}
 
     UINT32 victim() {
         UINT32 victimPageAddr = getLeafPageAddr(list.back());
-	cnt += victimPageAddr != list.back() ? 1 : 0;
-	return victimPageAddr;
+	      cnt += victimPageAddr != list.back() ? 1 : 0;
+	      return victimPageAddr;
     }
 };
 
