@@ -69,15 +69,6 @@ public:
     }
 };
 
-class CacheReplAdvisor {
-public:
-    TlbReplAdvisor() {};
-
-    virtual VOID visit(UINT32 row, UINT32 set) = 0;
-
-    virtual UINT32 victim(UINT32 row) = 0;
-};
-
 class LruTLB {
 private:
     UINT32 missCount;
