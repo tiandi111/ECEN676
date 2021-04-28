@@ -11,6 +11,8 @@
 #include <stack>
 #include <set>
 #include <list>
+#include <ctime>
+#include <string>
 #include "pin.H"
 
 using namespace std;
@@ -25,11 +27,11 @@ KNOB<UINT32> KnobLogPageSize(KNOB_MODE_WRITEONCE, "pintool",
 
 // This knob will set the cache param logNumRows
 KNOB<UINT32> KnobLogNumRows(KNOB_MODE_WRITEONCE, "pintool",
-                            "r", "10", "specify the log of number of rows in the cache");
+                            "r", "6", "specify the log of number of rows in the cache");
 
 // This knob will set the cache param associativity
 KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
-                               "a", "2", "specify the associativity of the cache");
+                               "a", "8", "specify the associativity of the cache");
 
 // This knob will set the param logPoolSize
 KNOB<UINT32> KnobLogPoolSize(KNOB_MODE_WRITEONCE, "pintool",
@@ -107,13 +109,13 @@ public:
 };
 
 // Static Re-Reference Interval Prediction
-class SrripAdvisor : public ReplAdvisor {
+class SrripReplAdvisor : public ReplAdvisor {
 protected:
     UINT32                   maxRpv;
     vector<vector<UINT32> >  vecs;
 
 public:
-    SrripAdvisor(UINT32 logNumRows, UINT32 associativity, UINT32 _maxRpv)
+    SrripReplAdvisor(UINT32 logNumRows, UINT32 associativity, UINT32 _maxRpv)
     : maxRpv(_maxRpv) {
         assert(associativity > 0);
         for (INT32 i = 0; i < INT64(1U << logNumRows); ++i) {
@@ -166,21 +168,39 @@ private:
     BOOL**        validBits;
     ReplAdvisor*  repl;
 
+    UINT32 	  tmpMissCount;
+    UINT32	  count;
+    vector<float> missRateRecorder; 
+
     UINT32 getRow(UINT32 virtualAddr) {
         UINT32 row = (virtualAddr & rowMask) >> logPageSize;
         assert(row < numRows);
         return row;
     }
 
+    VOID record(BOOL hit) {
+	count++;
+	if (!hit) tmpMissCount++;
+	if ((count % 1000) == 0) {
+	    missRateRecorder.push_back(float(tmpMissCount) / float(1000));
+	    tmpMissCount = 0;
+        }
+    }
+
 public:
     LruTLB(UINT32 logNumRowsParam, UINT32 associativityParam, UINT32 logPageSizeParam, ReplAdvisor* _repl )
-    : logNumRows(logNumRowsParam),
+    : missCount(0),
+      hitCount(0),
+      flushCount(0),
+      logNumRows(logNumRowsParam),
       associativity(associativityParam),
       logPageSize(logPageSizeParam),
       numRows(1u << logNumRowsParam),
       rowMask( ((1u << logNumRowsParam) - 1) << logPageSize ),
       pageNoMask( ~((1u << logPageSize) - 1) ),
-      repl(_repl) {
+      repl(_repl),
+      tmpMissCount(0),
+      count(0) {
         assert(logNumRowsParam + logPageSize < 32);
         assert(_repl);
 
@@ -205,11 +225,13 @@ public:
         for (INT64 i = 0; i < INT64(associativity); ++i) {
             if (validBits[row][i] && (virtPageNo[row][i] == (virtualAddr & pageNoMask) ) ) {
                 hitCount++;
+                record(true);
                 repl->visit(row, i);
                 return phyPageAddr[row][i];
             }
         }
         missCount++;
+        record(false);
         return 0;
     }
 
@@ -251,6 +273,13 @@ public:
                 validBits[row][i] = false;
                 return;
             }
+        }
+    }
+
+    void dumpTrace(ofstream& outfile) {
+	assert(missRateRecorder.size() > 0);
+        for (INT64 i = 0; i < INT64(missRateRecorder.size()); i++) {
+            outfile << missRateRecorder[i] << " ";
         }
     }
 };
@@ -484,7 +513,6 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
     return translation;
 }
 
-
 // Virtual Address translation routine
 void translateAddress(UINT32 virtualAddr) {
     UINT32 translation = tlb->physicalPage(virtualAddr);
@@ -510,8 +538,18 @@ VOID Fini(INT32 code, VOID *v)
     outfile.open(KnobOutputFile.Value().c_str());
     outfile << "Number of TLB hits: " << tlb->numHits() <<" | Number of TLB misses: "
         << tlb->numMisses() << " | Number of TLB flushes: " << tlb->numFlushes() << std::endl;
-    outfile << "Number of opt replacement: " << optReplCnt << std::endl;
+//    outfile << "Number of opt replacement: " << optReplCnt << std::endl;
+    outfile << KnobOutputFile.Value() << endl;
     outfile.close();
+
+/*    ofstream tracefile;
+    char name[16];
+    sprintf(name, "trace_%lu", time(NULL));
+    tracefile.open(name, ofstream::out | ofstream::trunc);
+    tlb->dumpTrace(tracefile);
+    tracefile << endl;
+    tracefile.close();
+*/
 }
 
 
@@ -535,8 +573,8 @@ int main(int argc, char * argv[])
 
     // Initialize tlb
 //    ReplAdvisor* tlbReplAdvisor = new RandomReplAdvisor(logNumRows);
-    ReplAdvisor* tlbReplAdvisor = new LruReplAdvisor(logNumRows);
-//    ReplAdvisor* tlbReplAdvisor = new SrripReplAdvisor(logNumRows);
+//    ReplAdvisor* tlbReplAdvisor = new LruReplAdvisor(logNumRows);
+    ReplAdvisor* tlbReplAdvisor = new SrripReplAdvisor(logNumRows, associativity, 8);
     tlb = new LruTLB(logNumRows, associativity, logPageSize, tlbReplAdvisor);
 
     // Initialize page table replacement policy
