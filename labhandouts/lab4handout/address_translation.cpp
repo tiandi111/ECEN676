@@ -27,15 +27,15 @@ KNOB<UINT32> KnobLogPageSize(KNOB_MODE_WRITEONCE, "pintool",
 
 // This knob will set the cache param logNumRows
 KNOB<UINT32> KnobLogNumRows(KNOB_MODE_WRITEONCE, "pintool",
-                            "r", "6", "specify the log of number of rows in the cache");
+                            "r", "2", "specify the log of number of rows in the cache");
 
 // This knob will set the cache param associativity
 KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
-                               "a", "8", "specify the associativity of the cache");
+                               "a", "4", "specify the associativity of the cache");
 
 // This knob will set the param logPoolSize
 KNOB<UINT32> KnobLogPoolSize(KNOB_MODE_WRITEONCE, "pintool",
-                               "s", "5", "specify the size of the frame pool");
+                               "s", "6", "specify the size of the frame pool");
 
 // Replacement policy interface
 // All replacement advisor must inherit this class.
@@ -493,8 +493,8 @@ UINT32 pageTableWalk(UINT32 virtualAddr, UINT32 frameSize) {
                         pageInfoTable->get(childPageAddr)->parentAddr = 0;
                     }
                 }
-                tlb->flush(pageInfo->virtualAddr);
-//                tlb->flush();
+               tlb->flush(pageInfo->virtualAddr); // selective flush
+//               tlb->flush(); // full flush
             }
 
             curPage->setWordAt(nextPageAddr, row);
@@ -541,7 +541,6 @@ VOID Fini(INT32 code, VOID *v)
 //    outfile << "Number of opt replacement: " << optReplCnt << std::endl;
     outfile << KnobOutputFile.Value() << endl;
     outfile.close();
-
 /*    ofstream tracefile;
     char name[16];
     sprintf(name, "trace_%lu", time(NULL));
@@ -578,8 +577,8 @@ int main(int argc, char * argv[])
     tlb = new LruTLB(logNumRows, associativity, logPageSize, tlbReplAdvisor);
 
     // Initialize page table replacement policy
-    pageTableReplAdvisor = new RandomReplAdvisor(1);
-//    pageTableReplAdvisor = new LruReplAdvisor(1);
+//    pageTableReplAdvisor = new RandomReplAdvisor(1);
+    pageTableReplAdvisor = new LruReplAdvisor(1);
 //    pageTableReplAdvisor = new LruPageTableReplAdvisor1(1, logPageSize, pageAllocator);
 
     // Register Instruction to be called to instrument instructions
